@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AuthRouteImport } from './routes/auth'
+import { Route as CorridaRunIdRouteImport } from './routes/corrida.$runId'
 import { Route as ApiPublicHooksProduceRouteImport } from './routes/api/public/hooks/produce'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +24,11 @@ const AuthRoute = AuthRouteImport.update({
   path: '/auth',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CorridaRunIdRoute = CorridaRunIdRouteImport.update({
+  id: '/corrida/$runId',
+  path: '/corrida/$runId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicHooksProduceRoute = ApiPublicHooksProduceRouteImport.update({
   id: '/api/public/hooks/produce',
   path: '/api/public/hooks/produce',
@@ -32,30 +38,35 @@ const ApiPublicHooksProduceRoute = ApiPublicHooksProduceRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/corrida/$runId': typeof CorridaRunIdRoute
   '/api/public/hooks/produce': typeof ApiPublicHooksProduceRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/corrida/$runId': typeof CorridaRunIdRoute
   '/api/public/hooks/produce': typeof ApiPublicHooksProduceRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/corrida/$runId': typeof CorridaRunIdRoute
   '/api/public/hooks/produce': typeof ApiPublicHooksProduceRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/auth' | '/api/public/hooks/produce'
+  fullPaths: '/' | '/auth' | '/corrida/$runId' | '/api/public/hooks/produce'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/auth' | '/api/public/hooks/produce'
-  id: '__root__' | '/' | '/auth' | '/api/public/hooks/produce'
+  to: '/' | '/auth' | '/corrida/$runId' | '/api/public/hooks/produce'
+  id:
+    '__root__' | '/' | '/auth' | '/corrida/$runId' | '/api/public/hooks/produce'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthRoute: typeof AuthRoute
+  CorridaRunIdRoute: typeof CorridaRunIdRoute
   ApiPublicHooksProduceRoute: typeof ApiPublicHooksProduceRoute
 }
 
@@ -75,6 +86,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/corrida/$runId': {
+      id: '/corrida/$runId'
+      path: '/corrida/$runId'
+      fullPath: '/corrida/$runId'
+      preLoaderRoute: typeof CorridaRunIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/hooks/produce': {
       id: '/api/public/hooks/produce'
       path: '/api/public/hooks/produce'
@@ -88,6 +106,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthRoute: AuthRoute,
+  CorridaRunIdRoute: CorridaRunIdRoute,
   ApiPublicHooksProduceRoute: ApiPublicHooksProduceRoute,
 }
 export const routeTree = rootRouteImport
