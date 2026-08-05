@@ -252,7 +252,7 @@ export async function runProduction(slot: Slot, triggeredBy: string): Promise<st
       .from("runs")
       .update({
         status: "done",
-        dossier: { ...dossier, seleccion, avisos: warnings },
+        dossier: { ...dossier, seleccion: { ...seleccion }, avisos: warnings } as never,
         master_prompt: String(dossier["prompt_maestro_video"] ?? ""),
         storyboard,
         duration_ms: Date.now() - started,
