@@ -83,13 +83,15 @@ function parseRss(xml: string, source: TrendItem["source"], limit: number): Tren
     const linkMatch = block.match(/<link>([\s\S]*?)<\/link>/);
     const trafficMatch = block.match(/<ht:approx_traffic>([\s\S]*?)<\/ht:approx_traffic>/);
     if (!titleMatch) continue;
-    const traffic = trafficMatch ? Number(decodeEntities(trafficMatch[1]).replace(/[^\d]/g, "")) : 0;
+    const traffic = trafficMatch?.[1]
+      ? Number(decodeEntities(trafficMatch[1]).replace(/[^\d]/g, ""))
+      : 0;
     items.push({
-      title: decodeEntities(titleMatch[1]),
+      title: decodeEntities(titleMatch[1] ?? ""),
       channel: null,
       views: traffic,
       velocity: null,
-      url: linkMatch ? decodeEntities(linkMatch[1]) : null,
+      url: linkMatch?.[1] ? decodeEntities(linkMatch[1]) : null,
       source,
     });
   }
