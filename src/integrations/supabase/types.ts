@@ -14,7 +14,113 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      runs: {
+        Row: {
+          created_at: string
+          dossier: Json | null
+          duration_ms: number | null
+          emotion: string | null
+          error: string | null
+          id: string
+          master_prompt: string | null
+          slot: Database["public"]["Enums"]["run_slot"]
+          status: Database["public"]["Enums"]["run_status"]
+          storyboard: Json
+          topic: string | null
+          topic_angle: string | null
+          triggered_by: string
+          updated_at: string
+          video_url: string | null
+          viral_score: number | null
+        }
+        Insert: {
+          created_at?: string
+          dossier?: Json | null
+          duration_ms?: number | null
+          emotion?: string | null
+          error?: string | null
+          id?: string
+          master_prompt?: string | null
+          slot: Database["public"]["Enums"]["run_slot"]
+          status?: Database["public"]["Enums"]["run_status"]
+          storyboard?: Json
+          topic?: string | null
+          topic_angle?: string | null
+          triggered_by?: string
+          updated_at?: string
+          video_url?: string | null
+          viral_score?: number | null
+        }
+        Update: {
+          created_at?: string
+          dossier?: Json | null
+          duration_ms?: number | null
+          emotion?: string | null
+          error?: string | null
+          id?: string
+          master_prompt?: string | null
+          slot?: Database["public"]["Enums"]["run_slot"]
+          status?: Database["public"]["Enums"]["run_status"]
+          storyboard?: Json
+          topic?: string | null
+          topic_angle?: string | null
+          triggered_by?: string
+          updated_at?: string
+          video_url?: string | null
+          viral_score?: number | null
+        }
+        Relationships: []
+      }
+      trend_candidates: {
+        Row: {
+          channel: string | null
+          created_at: string
+          id: string
+          run_id: string
+          score: number | null
+          selected: boolean
+          source: string
+          title: string
+          url: string | null
+          velocity: number | null
+          views: number
+        }
+        Insert: {
+          channel?: string | null
+          created_at?: string
+          id?: string
+          run_id: string
+          score?: number | null
+          selected?: boolean
+          source?: string
+          title: string
+          url?: string | null
+          velocity?: number | null
+          views?: number
+        }
+        Update: {
+          channel?: string | null
+          created_at?: string
+          id?: string
+          run_id?: string
+          score?: number | null
+          selected?: boolean
+          source?: string
+          title?: string
+          url?: string | null
+          velocity?: number | null
+          views?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trend_candidates_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -23,7 +129,15 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      run_slot: "viral" | "general"
+      run_status:
+        | "pending"
+        | "sensing"
+        | "analyzing"
+        | "writing"
+        | "rendering"
+        | "done"
+        | "error"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +264,17 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      run_slot: ["viral", "general"],
+      run_status: [
+        "pending",
+        "sensing",
+        "analyzing",
+        "writing",
+        "rendering",
+        "done",
+        "error",
+      ],
+    },
   },
 } as const
