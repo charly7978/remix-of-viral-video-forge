@@ -72,7 +72,7 @@ export async function reason<T>({
 
   if (!response.ok || !response.body) {
     const body = await response.text();
-    throw new Error(`Gateway IA [${response.status}]: ${body.slice(0, 500)}`);
+    throw gatewayError(response.status, body);
   }
 
   const reader = response.body.getReader();
@@ -130,7 +130,7 @@ export async function generateFrame(prompt: string): Promise<Uint8Array | null> 
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Gateway imagen [${response.status}]: ${body.slice(0, 300)}`);
+    throw gatewayError(response.status, body);
   }
 
   const data = (await response.json()) as {

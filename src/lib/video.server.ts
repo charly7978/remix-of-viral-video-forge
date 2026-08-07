@@ -1,3 +1,4 @@
+import { gatewayError } from "./ai.server";
 // Generación de video vertical con el gateway de IA de Lovable. Solo servidor.
 const GATEWAY = "https://ai.gateway.lovable.dev/v1";
 
@@ -29,7 +30,7 @@ export async function startVideoJob(prompt: string): Promise<VideoJob> {
 
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`Gateway video [${response.status}]: ${body.slice(0, 400)}`);
+    throw gatewayError(response.status, body);
   }
 
   const data = JSON.parse(body) as VideoJob;
@@ -43,7 +44,7 @@ export async function getVideoJob(id: string): Promise<VideoJob> {
   });
   const body = await response.text();
   if (!response.ok) {
-    throw new Error(`Gateway video [${response.status}]: ${body.slice(0, 400)}`);
+    throw gatewayError(response.status, body);
   }
   return JSON.parse(body) as VideoJob;
 }
@@ -55,7 +56,7 @@ export async function downloadVideo(id: string): Promise<Uint8Array> {
     redirect: "follow",
   });
   if (!response.ok) {
-    throw new Error(`Descarga de video [${response.status}]`);
+    throw gatewayError(response.status, "descarga de video");
   }
   return new Uint8Array(await response.arrayBuffer());
 }
