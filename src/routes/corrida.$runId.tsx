@@ -45,7 +45,9 @@ function RunDetail() {
   const { runId } = Route.useParams();
   const navigate = useNavigate();
   const { session, loading } = useSession();
+  const queryClient = useQueryClient();
   const fetchRun = useServerFn(getRun);
+  const pushVideo = useServerFn(advanceVideo);
 
   useEffect(() => {
     if (!loading && !session) void navigate({ to: "/auth" });
@@ -56,6 +58,32 @@ function RunDetail() {
     queryFn: () => fetchRun({ data: { id: runId } }),
     enabled: Boolean(session),
   });
+
+  const runData = dict(query.data?.run);
+  const videoStatus = text(runData["video_status"]);
+  const pendingVideo =
+    Boolean(runData["approved"]) &&
+    !query.data?.videoUrl &&
+    (videoStatus === "queued" || videoStatus === "in_progress");
+
+  const videoMutation = useMutation({
+    mutationFn: (retry: boolean) => pushVideo({ data: { id: runId, retry } }),
+    onSuccess: async (result) => {
+      if (result.status === "completed") toast.success("Video listo");
+      if (result.status === "failed") toast.error(result.message ?? "El render falló");
+      await queryClient.invalidateQueries({ queryKey: ["run", runId] });
+    },
+    onError: (error: unknown) => {
+      toast.error(error instanceof Error ? error.message : "No se pudo avanzar el render");
+    },
+  });
+
+  // Sondeo del render: cada consulta es corta, así no hay peticiones colgadas.
+  useEffect(() => {
+    if (!pendingVideo || videoMutation.isPending) return;
+    const timer = setTimeout(() => videoMutation.mutate(false), 8000);
+    return () => clearTimeout(timer);
+  }, [pendingVideo, videoMutation]);
 
   if (query.isLoading || !query.data) {
     return (
@@ -74,6 +102,10 @@ function RunDetail() {
   const audio = dict(dossier["audio"]);
   const monetizacion = dict(dossier["monetizacion"]);
   const masterPrompt = text(run["master_prompt"]);
+  const calidad = dict(run["quality"]);
+  const puntajes = dict(calidad["puntajes"]);
+  const mecanica = dict(calidad["mecanica"]);
+  const aprobado = Boolean(run["approved"]);
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10 md:px-8">
@@ -89,6 +121,11 @@ function RunDetail() {
           {typeof run["viral_score"] === "number" ? (
             <span className="label-caps">Puntaje {Math.round(run["viral_score"])}/100</span>
           ) : null}
+          {typeof run["quality_score"] === "number" ? (
+            <Badge variant={aprobado ? "default" : "destructive"}>
+              {aprobado ? "Aprobado" : "Rechazado"} · calidad {Math.round(run["quality_score"])}/100
+            </Badge>
+          ) : null}
         </div>
         <h1 className="mt-3 text-3xl font-bold md:text-4xl">{text(run["topic"]) || "Sin tema"}</h1>
         <p className="mt-2 text-muted-foreground">{text(run["topic_angle"])}</p>
@@ -100,14 +137,160 @@ function RunDetail() {
         </p>
       ) : null}
 
-      <Tabs defaultValue="guion" className="mt-8">
+      <Tabs defaultValue="video" className="mt-8">
         <TabsList className="flex-wrap">
+          <TabsTrigger value="video">Video</TabsTrigger>
+          <TabsTrigger value="calidad">Calidad</TabsTrigger>
           <TabsTrigger value="guion">Guion</TabsTrigger>
           <TabsTrigger value="prompt">Prompt maestro</TabsTrigger>
           <TabsTrigger value="planos">Planos</TabsTrigger>
           <TabsTrigger value="publicacion">Publicación</TabsTrigger>
           <TabsTrigger value="inteligencia">Inteligencia</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="video">
+          <Panel
+            title="Video del short (9:16)"
+            action={
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={videoMutation.isPending || !aprobado}
+                onClick={() => videoMutation.mutate(Boolean(query.data?.videoUrl) || videoStatus === "failed")}
+              >
+                <RefreshCw className={`size-3.5 ${videoMutation.isPending ? "animate-spin" : ""}`} />
+                {query.data.videoUrl ? "Regenerar" : "Generar ahora"}
+              </Button>
+            }
+          >
+            {!aprobado ? (
+              <p className="text-sm text-destructive">
+                El control de calidad bloqueó este short, así que no se generó el video. Revisá la
+                pestaña Calidad y volvé a lanzar una corrida.
+              </p>
+            ) : query.data.videoUrl ? (
+              <div className="space-y-3">
+                <video
+                  src={query.data.videoUrl}
+                  controls
+                  playsInline
+                  className="mx-auto max-h-[70vh] rounded-md border border-border"
+                />
+                <a
+                  href={query.data.videoUrl}
+                  download
+                  className="label-caps inline-flex items-center gap-2 hover:text-foreground"
+                >
+                  <Film className="size-3.5" /> Descargar MP4
+                </a>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {videoStatus === "failed"
+                  ? "El render falló. Probá de nuevo con el botón Generar ahora."
+                  : "Renderizando el video… puede tardar entre uno y tres minutos. La página se actualiza sola."}
+              </p>
+            )}
+          </Panel>
+        </TabsContent>
+
+        <TabsContent value="calidad" className="space-y-4">
+          <Panel title="Checklist automático de calidad">
+            {Object.keys(puntajes).length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Esta corrida es anterior al checklist automático.
+              </p>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {(
+                  [
+                    ["gancho", "Gancho (0-3s)"],
+                    ["impacto_emocional", "Impacto emocional"],
+                    ["ritmo", "Ritmo"],
+                    ["originalidad", "Originalidad"],
+                    ["claridad", "Claridad"],
+                    ["sin_repeticiones", "Guion sin repeticiones"],
+                    ["cta", "Llamado a la acción"],
+                  ] as const
+                ).map(([key, label]) => {
+                  const value = typeof puntajes[key] === "number" ? (puntajes[key] as number) : 0;
+                  return (
+                    <div key={key} className="rounded-md border border-border bg-secondary/40 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="label-caps">{label}</p>
+                        <span
+                          className={`font-display text-lg font-bold ${value >= 80 ? "text-primary" : "text-destructive"}`}
+                        >
+                          {Math.round(value)}
+                        </span>
+                      </div>
+                      <div className="mt-2 h-1.5 rounded-full bg-border">
+                        <div
+                          className={`h-1.5 rounded-full ${value >= 80 ? "bg-primary" : "bg-destructive"}`}
+                          style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Panel>
+
+          <Panel title="Diagnóstico">
+            <Field
+              label="Retención estimada a los 3s"
+              value={
+                typeof calidad["prediccion_retencion_3s"] === "number"
+                  ? `${Math.round(calidad["prediccion_retencion_3s"])}%`
+                  : ""
+              }
+            />
+            <Field
+              label="Retención estimada al final"
+              value={
+                typeof calidad["prediccion_retencion_final"] === "number"
+                  ? `${Math.round(calidad["prediccion_retencion_final"])}%`
+                  : ""
+              }
+            />
+            <Field
+              label="Estructura"
+              value={
+                Object.keys(mecanica).length > 0
+                  ? `${String(mecanica["duracion_total_seg"] ?? "?")}s · ${String(mecanica["cantidad_de_planos"] ?? "?")} planos · corte cada ${String(mecanica["corte_promedio_seg"] ?? "?")}s · CTA ${mecanica["tiene_cta"] ? "sí" : "no"}`
+                  : ""
+              }
+            />
+            <Field
+              label="Frases repetidas detectadas"
+              value={list(calidad["frases_repetidas"]).map(String).join(" | ")}
+            />
+            <Field label="Bloqueos" value={list(calidad["bloqueos"]).map(String).join("\n")} />
+            <Field
+              label="Intentos de escritura"
+              value={String(dossier["intentos_de_calidad"] ?? "")}
+            />
+          </Panel>
+
+          {list(calidad["problemas"]).length > 0 ? (
+            <Panel title="Correcciones señaladas por el auditor">
+              <div className="space-y-3">
+                {list(calidad["problemas"]).map((raw, index) => {
+                  const problema = dict(raw);
+                  return (
+                    <div key={index} className="rounded-md border border-border bg-secondary/40 p-4">
+                      <p className="label-caps">{text(problema["area"])}</p>
+                      <p className="mt-2 text-sm">{text(problema["detalle"])}</p>
+                      <p className="mt-2 text-sm text-primary">{text(problema["correccion"])}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </Panel>
+          ) : null}
+        </TabsContent>
+
 
         <TabsContent value="guion" className="space-y-4">
           <Panel title="Gancho (0 a 3 segundos)">
