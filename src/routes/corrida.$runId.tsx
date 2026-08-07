@@ -1,14 +1,15 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, Copy } from "lucide-react";
-import { getRun } from "@/lib/runs.functions";
+import { ArrowLeft, Copy, Film, RefreshCw } from "lucide-react";
+import { advanceVideo, getRun } from "@/lib/runs.functions";
 import { useSession } from "@/hooks/use-session";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
 
 export const Route = createFileRoute("/corrida/$runId")({
   head: () => ({
