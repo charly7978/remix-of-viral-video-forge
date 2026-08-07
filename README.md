@@ -39,7 +39,8 @@ Variables de entorno:
 | --- | --- |
 | `SUPABASE_URL` / `VITE_SUPABASE_URL` | URL del proyecto Supabase |
 | `SUPABASE_PUBLISHABLE_KEY` / `VITE_SUPABASE_PUBLISHABLE_KEY` | Anon/publishable key |
-| `GEMINI_API_KEY` | Clave de Google AI Studio (razonamiento + imágenes) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service role key (SECRETA, solo servidor). Panel: **Supabase → Settings → API → Project API keys → service_role**. Sin ella el panel abre pero las corridas fallan. |
+| `GEMINI_API_KEY` | Clave de Google AI Studio (razonamiento + imágenes). Gratis en https://aistudio.google.com/apikey |
 | `YOUTUBE_API_KEY` | Clave de YouTube Data API v3 (sensado de tendencias) |
 | `SCHEDULER_HOOK_SECRET` | Secreto del webhook de producción programada |
 
