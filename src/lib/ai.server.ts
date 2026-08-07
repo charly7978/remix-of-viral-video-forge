@@ -5,7 +5,7 @@
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 // Modelos con free tier real.
-const MODEL_REASON = "gemini-2.5-flash-lite"; // razonamiento + salida JSON estructurada
+const MODEL_REASON = "gemini-2.0-flash"; // razonamiento + salida JSON estructurada
 const MODEL_IMAGE = "gemini-2.5-flash-image"; // generación de imágenes
 
 function apiKey(envName: string): string {
