@@ -294,6 +294,25 @@ function RunRowCard({ run }: { run: RunRow }) {
             </span>
           </div>
         ) : null}
+        {run.quality_score !== null ? (
+          <div className="flex items-center gap-2">
+            <span className="label-caps">Calidad</span>
+            <span
+              className={`font-display text-lg font-bold ${run.approved ? "text-radar" : "text-destructive"}`}
+            >
+              {Math.round(run.quality_score)}
+            </span>
+          </div>
+        ) : null}
+        {run.status === "done" ? (
+          <Badge variant={run.video_url ? "default" : run.approved ? "secondary" : "destructive"}>
+            {run.video_url
+              ? "Video listo"
+              : run.approved
+                ? "Video en render"
+                : "Bloqueado por calidad"}
+          </Badge>
+        ) : null}
         {run.emotion ? (
           <div className="flex items-center gap-2">
             <span className="label-caps">Emoción</span>
@@ -301,6 +320,7 @@ function RunRowCard({ run }: { run: RunRow }) {
           </div>
         ) : null}
       </div>
+
     </Link>
   );
 }

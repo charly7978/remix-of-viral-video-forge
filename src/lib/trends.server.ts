@@ -144,8 +144,44 @@ export async function sense(): Promise<{ items: TrendItem[]; warnings: string[] 
   return { items: [...youtube, ...trends, ...news], warnings };
 }
 
+const VACIAS = new Set([
+  "para","como","sobre","desde","este","esta","esto","entre","hasta","donde","cuando","porque","quien",
+  "todos","todo","muy","mas","menos","pero","unos","unas","luego","ante","tras","segun","contra","cada",
+  "the","and","with","that","este","aquel","fue","son","por","con","los","las","del","una","uno","que",
+  "argentina","video","shorts","short","oficial","vivo","hoy",
+]);
+
+/** Agrupa las señales por palabra clave para exponer qué hecho concentra el calor real. */
+export function keywordClusters(items: TrendItem[], limit = 12): string[] {
+  const counts = new Map<string, { hits: number; peso: number; ejemplo: string }>();
+  for (const item of items) {
+    const words = item.title
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((word) => word.length > 3 && !VACIAS.has(word));
+    for (const word of new Set(words)) {
+      const current = counts.get(word) ?? { hits: 0, peso: 0, ejemplo: item.title };
+      current.hits += 1;
+      current.peso += item.velocity ?? item.views ?? 0;
+      counts.set(word, current);
+    }
+  }
+  return [...counts.entries()]
+    .filter(([, value]) => value.hits > 1)
+    .sort((a, b) => b[1].hits - a[1].hits || b[1].peso - a[1].peso)
+    .slice(0, limit)
+    .map(
+      ([word, value]) =>
+        `- "${word}": ${value.hits} señales · peso ${Math.round(value.peso).toLocaleString("es-AR")} · ej: ${value.ejemplo}`,
+    );
+}
+
 export function asBriefing(items: TrendItem[]): string {
   const bySource = (source: TrendItem["source"]) => items.filter((item) => item.source === source);
+
   const yt = bySource("youtube")
     .slice(0, 30)
     .map(
@@ -161,6 +197,9 @@ export function asBriefing(items: TrendItem[]): string {
     .join("\n");
 
   return [
+    "== SEÑALES AGRUPADAS / DÓNDE ESTÁ EL CALOR REAL ==",
+    keywordClusters(items).join("\n") || "(sin coincidencias)",
+    "",
     "== YOUTUBE ARGENTINA / MÁS VISTOS AHORA ==",
     yt || "(sin datos)",
     "",
@@ -170,4 +209,5 @@ export function asBriefing(items: TrendItem[]): string {
     "== TITULARES DEL DÍA (ARGENTINA) ==",
     nw || "(sin datos)",
   ].join("\n");
+
 }
