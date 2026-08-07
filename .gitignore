@@ -21,6 +21,11 @@ dist-ssr
 .env.*
 !.env.example
 
+# Lockfiles de otros gestores
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
