@@ -5,10 +5,8 @@ export interface TrendItem {
   channel: string | null;
   views: number;
   velocity: number | null;
-  score: number;
-  source: "youtube" | "google_trends" | "news";
-  source_weight: number;
   url: string | null;
+  source: "youtube" | "google_trends" | "news";
   publishedAt?: string;
   description?: string;
 }
@@ -21,32 +19,7 @@ function hoursSince(iso: string | undefined): number {
   return diff > 0.5 ? diff : 0.5;
 }
 
-function sourceWeight(source: TrendItem["source"]): number {
-  switch (source) {
-    case "youtube":
-      return 1.4;
-    case "google_trends":
-      return 1.1;
-    case "news":
-      return 0.9;
-  }
-}
-
-function scoreYouTube(views: number, velocity: number): number {
-  return Math.round(velocity * 0.7 + views * 0.05 + Math.log10(Math.max(views, 1)) * 10);
-}
-
-function scoreRss(traffic: number, source: TrendItem["source"]): number {
-  return Math.round(traffic * (source === "google_trends" ? 0.8 : 0.5));
-}
-
-function buildTrendItem(item: Omit<TrendItem, "score">): TrendItem {
-  return {
-    ...item,
-    score: Math.round(item.source_weight * (item.velocity ?? item.views) + (item.velocity ?? 0) * 0.15),
-  };
-}
-
+/** Videos en tendencia en Argentina, ordenados por velocidad de visualizaciones. */
 export async function fetchYouTubeTrending(): Promise<TrendItem[]> {
   const key = process.env["YOUTUBE_API_KEY"];
   if (!key) return [];
@@ -76,21 +49,18 @@ export async function fetchYouTubeTrending(): Promise<TrendItem[]> {
   return (data.items ?? [])
     .map((item) => {
       const views = Number(item.statistics.viewCount ?? 0);
-      const velocity = Math.round(views / hoursSince(item.snippet.publishedAt));
-      return buildTrendItem({
+      return {
         title: item.snippet.title,
         channel: item.snippet.channelTitle,
         views,
-        velocity,
-        source: "youtube",
-        source_weight: sourceWeight("youtube"),
+        velocity: Math.round(views / hoursSince(item.snippet.publishedAt)),
         url: `https://www.youtube.com/watch?v=${item.id}`,
+        source: "youtube" as const,
         publishedAt: item.snippet.publishedAt,
         description: item.snippet.description.slice(0, 400),
-      });
+      };
     })
-    .filter((item) => item.views > 0)
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => (b.velocity ?? 0) - (a.velocity ?? 0));
 }
 
 function decodeEntities(value: string): string {
@@ -116,16 +86,13 @@ function parseRss(xml: string, source: TrendItem["source"], limit: number): Tren
     const traffic = trafficMatch?.[1]
       ? Number(decodeEntities(trafficMatch[1]).replace(/[^\d]/g, ""))
       : 0;
-    const score = scoreRss(traffic, source);
     items.push({
       title: decodeEntities(titleMatch[1] ?? ""),
       channel: null,
       views: traffic,
       velocity: null,
-      score,
-      source,
-      source_weight: sourceWeight(source),
       url: linkMatch?.[1] ? decodeEntities(linkMatch[1]) : null,
+      source,
     });
   }
   return items;
@@ -174,28 +141,65 @@ export async function sense(): Promise<{ items: TrendItem[]; warnings: string[] 
     );
   }
 
-  const items = [...youtube, ...trends, ...news].sort((a, b) => b.score - a.score);
-  return { items, warnings };
+  return { items: [...youtube, ...trends, ...news], warnings };
+}
+
+const VACIAS = new Set([
+  "para","como","sobre","desde","este","esta","esto","entre","hasta","donde","cuando","porque","quien",
+  "todos","todo","muy","mas","menos","pero","unos","unas","luego","ante","tras","segun","contra","cada",
+  "the","and","with","that","este","aquel","fue","son","por","con","los","las","del","una","uno","que",
+  "argentina","video","shorts","short","oficial","vivo","hoy",
+]);
+
+/** Agrupa las señales por palabra clave para exponer qué hecho concentra el calor real. */
+export function keywordClusters(items: TrendItem[], limit = 12): string[] {
+  const counts = new Map<string, { hits: number; peso: number; ejemplo: string }>();
+  for (const item of items) {
+    const words = item.title
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((word) => word.length > 3 && !VACIAS.has(word));
+    for (const word of new Set(words)) {
+      const current = counts.get(word) ?? { hits: 0, peso: 0, ejemplo: item.title };
+      current.hits += 1;
+      current.peso += item.velocity ?? item.views ?? 0;
+      counts.set(word, current);
+    }
+  }
+  return [...counts.entries()]
+    .filter(([, value]) => value.hits > 1)
+    .sort((a, b) => b[1].hits - a[1].hits || b[1].peso - a[1].peso)
+    .slice(0, limit)
+    .map(
+      ([word, value]) =>
+        `- "${word}": ${value.hits} señales · peso ${Math.round(value.peso).toLocaleString("es-AR")} · ej: ${value.ejemplo}`,
+    );
 }
 
 export function asBriefing(items: TrendItem[]): string {
-  const bySource = (source: TrendItem["source"]) =>
-    items
-      .filter((item) => item.source === source)
-      .slice(0, 30)
-      .map((item, index) => {
-        const score = `score ${item.score}`;
-        if (source === "youtube") {
-          return `${index + 1}. [${item.views.toLocaleString("es-AR")} vistas | ${(item.velocity ?? 0).toLocaleString("es-AR")} vistas/h | ${score}] ${item.title} — ${item.channel}`;
-        }
-        return `${index + 1}. [${score}] ${item.title}${item.views ? ` (~${item.views.toLocaleString("es-AR")} estimado)` : ""}`;
-      });
+  const bySource = (source: TrendItem["source"]) => items.filter((item) => item.source === source);
 
-  const yt = bySource("youtube").join("\n");
-  const gt = bySource("google_trends").join("\n");
-  const nw = bySource("news").join("\n");
+  const yt = bySource("youtube")
+    .slice(0, 30)
+    .map(
+      (item, index) =>
+        `${index + 1}. [${item.views.toLocaleString("es-AR")} vistas | ${(item.velocity ?? 0).toLocaleString("es-AR")} vistas/h] ${item.title} — ${item.channel}`,
+    )
+    .join("\n");
+  const gt = bySource("google_trends")
+    .map((item) => `- ${item.title}${item.views ? ` (~${item.views.toLocaleString("es-AR")} búsquedas)` : ""}`)
+    .join("\n");
+  const nw = bySource("news")
+    .map((item) => `- ${item.title}`)
+    .join("\n");
 
   return [
+    "== SEÑALES AGRUPADAS / DÓNDE ESTÁ EL CALOR REAL ==",
+    keywordClusters(items).join("\n") || "(sin coincidencias)",
+    "",
     "== YOUTUBE ARGENTINA / MÁS VISTOS AHORA ==",
     yt || "(sin datos)",
     "",
@@ -205,4 +209,5 @@ export function asBriefing(items: TrendItem[]): string {
     "== TITULARES DEL DÍA (ARGENTINA) ==",
     nw || "(sin datos)",
   ].join("\n");
+
 }

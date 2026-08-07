@@ -16,6 +16,7 @@ export type Database = {
     Tables: {
       runs: {
         Row: {
+          approved: boolean
           created_at: string
           dossier: Json | null
           duration_ms: number | null
@@ -23,6 +24,8 @@ export type Database = {
           error: string | null
           id: string
           master_prompt: string | null
+          quality: Json | null
+          quality_score: number | null
           slot: Database["public"]["Enums"]["run_slot"]
           status: Database["public"]["Enums"]["run_status"]
           storyboard: Json
@@ -30,10 +33,13 @@ export type Database = {
           topic_angle: string | null
           triggered_by: string
           updated_at: string
+          video_job_id: string | null
+          video_status: string
           video_url: string | null
           viral_score: number | null
         }
         Insert: {
+          approved?: boolean
           created_at?: string
           dossier?: Json | null
           duration_ms?: number | null
@@ -41,6 +47,8 @@ export type Database = {
           error?: string | null
           id?: string
           master_prompt?: string | null
+          quality?: Json | null
+          quality_score?: number | null
           slot: Database["public"]["Enums"]["run_slot"]
           status?: Database["public"]["Enums"]["run_status"]
           storyboard?: Json
@@ -48,10 +56,13 @@ export type Database = {
           topic_angle?: string | null
           triggered_by?: string
           updated_at?: string
+          video_job_id?: string | null
+          video_status?: string
           video_url?: string | null
           viral_score?: number | null
         }
         Update: {
+          approved?: boolean
           created_at?: string
           dossier?: Json | null
           duration_ms?: number | null
@@ -59,6 +70,8 @@ export type Database = {
           error?: string | null
           id?: string
           master_prompt?: string | null
+          quality?: Json | null
+          quality_score?: number | null
           slot?: Database["public"]["Enums"]["run_slot"]
           status?: Database["public"]["Enums"]["run_status"]
           storyboard?: Json
@@ -66,6 +79,8 @@ export type Database = {
           topic_angle?: string | null
           triggered_by?: string
           updated_at?: string
+          video_job_id?: string | null
+          video_status?: string
           video_url?: string | null
           viral_score?: number | null
         }

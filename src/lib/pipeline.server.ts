@@ -1,6 +1,8 @@
 // Orquestador de la producción diaria. Solo servidor.
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { generateFrame, generateVideo, reason } from "./ai.server";
+import { generateFrame, reason } from "./ai.server";
+import { evaluateQuality, type QualityCheck } from "./quality.server";
+import { startVideoJob } from "./video.server";
 import { asBriefing, sense, type TrendItem } from "./trends.server";
 
 export type Slot = "viral" | "general";
@@ -25,11 +27,14 @@ const seleccionSchema = obj({
   ventana_de_oportunidad: str,
   audiencia: str,
   saturacion_competencia: str,
+  gancho_tentativo: str,
+  promesa_de_valor: str,
+  disparador_de_discusion: str,
   datos_verificables: strArray,
   riesgos: strArray,
   descartados: {
     type: "array",
-    items: obj({ tema: str, motivo: str }),
+    items: obj({ tema: str, motivo: str, puntaje: num }),
   },
 });
 
@@ -105,15 +110,28 @@ export interface Seleccion {
   ventana_de_oportunidad: string;
   audiencia: string;
   saturacion_competencia: string;
+  gancho_tentativo: string;
+  promesa_de_valor: string;
+  disparador_de_discusion: string;
   datos_verificables: string[];
   riesgos: string[];
-  descartados: Array<{ tema: string; motivo: string }>;
+  descartados: Array<{ tema: string; motivo: string; puntaje: number }>;
 }
 
 const ESTRATEGA = `Sos el director de contenido de una operación comercial de shorts verticales en Argentina.
 Tu único objetivo es la retención y las visualizaciones que generan ingresos. No hacés contenido infantil,
 no hacés obviedades, no repetís lo que ya está saturado. Pensás como un editor de tabloide con rigor de periodista:
 gancho brutal, dato real, cero relleno. Escribís en español rioplatense natural, sin argentinismos forzados.`;
+
+const REGLAS_DE_IMPACTO = `Reglas de impacto no negociables:
+- Los primeros 3 segundos deciden todo: imagen imposible de ignorar + una frase que abra un bucle mental.
+- Una sola idea por short, llevada al extremo. Si hay dos ideas, sobra una.
+- Tensión creciente: cada 5 segundos algo tiene que cambiar (dato nuevo, giro, contradicción, revelación).
+- Corte visual cada 1,5 a 3 segundos, sin mesetas ni relleno.
+- Prohibido: saludos, despedidas, "hoy te voy a contar", "dato curioso", pedidos genéricos de suscripción.
+- Prohibido repetir frases, ideas o estructuras: cada línea aporta información nueva.
+- El texto en pantalla no transcribe la voz: la refuerza con 3 a 6 palabras de golpe.
+- El cierre deja una pregunta abierta o una afirmación discutible que obliga a comentar o a rebobinar.`;
 
 function fechaHoy(): string {
   return new Intl.DateTimeFormat("es-AR", {
@@ -141,13 +159,24 @@ misterio histórico, dato de ciencia contraintuitivo, curiosidad argentina). Pro
 
 ${consigna}
 
+Método obligatorio de selección (hacelo internamente y devolvé solo el resultado):
+1. Armá una lista corta de 6 temas candidatos a partir del material sensado, agrupando señales que
+   hablan del mismo hecho aunque estén escritas distinto.
+2. Puntuá cada candidato de 0 a 100 con estos pesos: velocidad de crecimiento 30, carga emocional 25,
+   potencial de discusión y comentarios 20, ventana restante 15, facilidad de producción en 45 segundos 10.
+3. Descartá todo tema que dependa de imágenes de archivo imposibles, que sea puro chisme sin dato,
+   que ya esté saturado sin ángulo nuevo, o que arriesgue desmonetización.
+4. Quedate con el ganador y devolvé los otros cinco como descartados, con motivo y puntaje.
+
 Material sensado en vivo:
 ${briefing}
 
-Devolvé la selección con puntaje_viral de 0 a 100 (criterio: velocidad, carga emocional, cobertura
-mediática, potencial de discusión y facilidad de producción en 45 segundos), las afirmaciones factuales
-que el guion podrá sostener, los riesgos reputacionales o de desmonetización, y al menos tres temas
-descartados con el motivo exacto del descarte.`,
+Además del tema ganador, devolvé:
+- gancho_tentativo: la frase exacta de los primeros 3 segundos.
+- promesa_de_valor: qué se lleva el espectador si se queda hasta el final.
+- disparador_de_discusion: la afirmación o pregunta que va a llenar los comentarios.
+- datos_verificables: afirmaciones factuales que el guion puede sostener.
+- riesgos: reputacionales o de desmonetización.`,
   });
 }
 
@@ -164,25 +193,57 @@ Tema: ${seleccion.tema}
 Ángulo: ${seleccion.angulo}
 Emoción objetivo: ${seleccion.emocion_objetivo}
 Audiencia: ${seleccion.audiencia}
+Gancho de referencia: ${seleccion.gancho_tentativo}
+Promesa: ${seleccion.promesa_de_valor}
+Disparador de discusión: ${seleccion.disparador_de_discusion}
 Franja: ${slot === "viral" ? "tema caliente del día" : "interés general de alto impacto"}
 Datos que se pueden afirmar: ${seleccion.datos_verificables.join(" | ")}
 Riesgos a esquivar: ${seleccion.riesgos.join(" | ")}
 
-Reglas duras:
-- Los primeros 3 segundos deciden todo: imagen imposible de ignorar + una frase que abra un bucle mental.
-- El guion va segundo a segundo, sin huecos, con corte visual cada 1,5 a 3 segundos.
-- Nada de "hoy te voy a contar", nada de saludos, nada de despedidas.
-- El cierre tiene que empujar el rebobinado o el comentario, no pedir suscripción de manera genérica.
-- prompt_maestro_video: un único prompt largo, autosuficiente y en inglés técnico, listo para pegar en un
-  generador de video por IA (Sora, Veo, Kling, Runway). Debe incluir formato 9:16, duración, estilo visual,
-  paleta, tipo de lente, iluminación, ritmo de montaje, tratamiento de texto en pantalla y referencia de audio.
+${REGLAS_DE_IMPACTO}
+
+Requisitos estructurales:
+- El guion va segundo a segundo, sin huecos ni superposiciones: cada tramo arranca exactamente donde
+  termina el anterior, desde 0 hasta la duración final (entre 40 y 55 segundos).
 - planos: entre 12 y 18 planos, cada uno con su prompt de generación en inglés técnico.
+- prompt_maestro_video: un único prompt largo, autosuficiente y en inglés técnico, listo para pegar en un
+  generador de video por IA. Debe incluir formato vertical 9:16, duración, estilo visual, paleta, tipo de
+  lente, iluminación, ritmo de montaje, tratamiento de texto en pantalla y referencia de audio.
 - La descripción de YouTube y el caption de TikTok tienen que estar escritos para el algoritmo y para el
-  humano al mismo tiempo, con las palabras clave del tema al principio.`,
+  humano al mismo tiempo, con las palabras clave del tema al principio.
+- control_de_calidad: la lista de verificaciones que este short ya cumple, punto por punto.`,
   });
 }
 
-const VIDEO_BUCKET = "videos";
+async function corregirDossier(
+  dossier: Record<string, unknown>,
+  calidad: QualityCheck,
+): Promise<Record<string, unknown>> {
+  const fallas = [
+    ...(calidad.bloqueos ?? []),
+    ...(calidad.problemas ?? []).map((p) => `${p.area}: ${p.detalle} → ${p.correccion}`),
+  ];
+
+  return reason<Record<string, unknown>>({
+    system: ESTRATEGA,
+    schemaName: "dossier",
+    schema: dossierSchema,
+    effort: "high",
+    prompt: `El auditor de calidad rechazó este short. Reescribilo entero corrigiendo TODAS las fallas,
+sin perder lo que ya funcionaba y sin cambiar de tema.
+
+Fallas a corregir:
+${fallas.map((falla) => `- ${falla}`).join("\n")}
+
+${REGLAS_DE_IMPACTO}
+
+Corregí especialmente el gancho (tiene que ser más brutal y más concreto), la curva de tensión, las
+repeticiones y el cierre. Mantené el guion continuo sin huecos y entre 40 y 55 segundos.
+
+Dossier rechazado:
+${JSON.stringify(dossier).slice(0, 40_000)}`,
+  });
+}
 
 async function renderStoryboard(
   runId: string,
@@ -210,51 +271,6 @@ async function renderStoryboard(
   }
 
   return frames;
-}
-
-async function saveVideo(runId: string, bytes: Uint8Array): Promise<string | null> {
-  const path = `${runId}/final.mp4`;
-  const { error } = await supabaseAdmin.storage
-    .from(VIDEO_BUCKET)
-    .upload(path, bytes, { contentType: "video/mp4", upsert: true });
-  if (error) {
-    console.error("Error al guardar video:", error.message);
-    return null;
-  }
-  return path;
-}
-
-async function renderVideo(runId: string, basePrompt: string): Promise<string | null> {
-  if (!basePrompt) return null;
-  try {
-    const videoPrompt = `${basePrompt}
-
-Produce a high-quality 9:16 short-form video in MP4 format. Use cinematic lighting, crisp motion, and polished art direction suitable for YouTube Shorts and TikTok. Output a direct video asset or a signed URL if available.`;
-    const videoBytes = await generateVideo(videoPrompt);
-    if (!videoBytes) return null;
-    return await saveVideo(runId, videoBytes);
-  } catch (error) {
-    console.error("Falló la generación de video:", error instanceof Error ? error.message : error);
-    return null;
-  }
-}
-
-async function reviewDossier(dossier: Record<string, unknown>): Promise<string[]> {
-  const reviewSchema = {
-    type: "array",
-    items: str,
-  };
-
-  return reason<string[]>({
-    system: ESTRATEGA,
-    schemaName: "qa_notes",
-    schema: reviewSchema,
-    effort: "medium",
-    prompt: `Revisá el siguiente dossier técnico para detectar fallas de formato, debilidades de guion, problemas de ritmo, riesgos de monetización y oportunidades de mejora para un short de alto impacto.
-
-Dossier:
-${JSON.stringify(dossier, null, 2)}`,
-  });
 }
 
 export async function runProduction(slot: Slot, triggeredBy: string): Promise<string> {
@@ -289,30 +305,56 @@ export async function runProduction(slot: Slot, triggeredBy: string): Promise<st
       })
       .eq("id", runId);
 
-    const dossier = await escribirDossier(slot, seleccion);
-    const reviewNotes = await reviewDossier(dossier);
-    const dossierFinal = {
-      ...dossier,
-      seleccion: { ...seleccion },
-      avisos: warnings,
-      control_de_calidad: Array.isArray(dossier["control_de_calidad"])
-        ? [...(dossier["control_de_calidad"] as string[]), ...reviewNotes]
-        : reviewNotes,
-    } as Record<string, unknown>;
+    let dossier = await escribirDossier(slot, seleccion);
+    let calidad = await evaluateQuality(dossier, seleccion.tema);
+    let intentos = 1;
+
+    // Una pasada de corrección si el checklist bloquea la aprobación.
+    if (!calidad.aprobado) {
+      dossier = await corregirDossier(dossier, calidad);
+      calidad = await evaluateQuality(dossier, seleccion.tema);
+      intentos = 2;
+    }
 
     await supabaseAdmin.from("runs").update({ status: "rendering" }).eq("id", runId);
-    const planos = (dossierFinal["planos"] ?? []) as Array<{ numero?: number; prompt_generacion?: string }>;
+    const planos = (dossier["planos"] ?? []) as Array<{ numero?: number; prompt_generacion?: string }>;
     const storyboard = await renderStoryboard(runId, planos);
-    const videoPath = await renderVideo(runId, String(dossierFinal["prompt_maestro_video"] ?? ""));
+
+    const masterPrompt = String(dossier["prompt_maestro_video"] ?? "");
+    let videoJobId: string | null = null;
+    let videoStatus = calidad.aprobado ? "queued" : "blocked";
+    let videoError: string | null = null;
+
+    // El video solo se encola si el short pasó el control de calidad.
+    if (calidad.aprobado && masterPrompt) {
+      try {
+        const job = await startVideoJob(videoPrompt(masterPrompt, dossier));
+        videoJobId = job.id;
+        videoStatus = job.status === "completed" ? "completed" : "in_progress";
+      } catch (error) {
+        videoStatus = "failed";
+        videoError = error instanceof Error ? error.message : "Error al encolar el video";
+      }
+    }
 
     await supabaseAdmin
       .from("runs")
       .update({
         status: "done",
-        dossier: dossierFinal as never,
-        master_prompt: String(dossierFinal["prompt_maestro_video"] ?? ""),
+        dossier: {
+          ...dossier,
+          seleccion: { ...seleccion },
+          avisos: warnings,
+          intentos_de_calidad: intentos,
+        } as never,
+        master_prompt: masterPrompt,
         storyboard,
-        video_url: videoPath,
+        quality: calidad as never,
+        quality_score: Math.round(calidad.puntaje_total ?? 0),
+        approved: Boolean(calidad.aprobado),
+        video_job_id: videoJobId,
+        video_status: videoStatus,
+        error: videoError,
         duration_ms: Date.now() - started,
       })
       .eq("id", runId);
@@ -328,6 +370,21 @@ export async function runProduction(slot: Slot, triggeredBy: string): Promise<st
   }
 }
 
+/** Prompt final para el generador de video, con el gancho al frente. */
+export function videoPrompt(masterPrompt: string, dossier: Record<string, unknown>): string {
+  const hook = (dossier["hook"] ?? {}) as Record<string, unknown>;
+  const onScreen = String(hook["texto_en_pantalla"] ?? "").trim();
+  const action = String(hook["accion_visual"] ?? "").trim();
+  return [
+    masterPrompt,
+    action ? `Opening shot: ${action}.` : "",
+    onScreen ? `On-screen text overlay, bold condensed sans-serif: "${onScreen}".` : "",
+    "Vertical 9:16, fast cuts every 1.5 seconds, cinematic contrast, no watermark, no letterboxing.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 async function guardarCandidatos(runId: string, items: TrendItem[]): Promise<void> {
   const rows = items.slice(0, 60).map((item) => ({
     run_id: runId,
@@ -335,7 +392,7 @@ async function guardarCandidatos(runId: string, items: TrendItem[]): Promise<voi
     channel: item.channel,
     views: item.views,
     velocity: item.velocity,
-    score: item.score,
+    score: item.velocity ?? item.views,
     source: item.source,
     url: item.url,
   }));
