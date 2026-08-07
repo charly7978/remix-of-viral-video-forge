@@ -9,6 +9,20 @@ function apiKey(): string {
 
 type JsonSchema = Record<string, unknown>;
 
+/** Traduce las fallas del gateway a algo accionable para el operador. */
+export function gatewayError(status: number, body: string): Error {
+  if (status === 402) {
+    return new Error(
+      "Se agotaron los créditos de IA del espacio de trabajo. Recargá créditos o subí de plan para seguir produciendo.",
+    );
+  }
+  if (status === 429) {
+    return new Error("Límite de pedidos alcanzado. Esperá unos minutos y volvé a lanzar la corrida.");
+  }
+  return new Error(`Servicio de IA [${status}]: ${body.slice(0, 400)}`);
+}
+
+
 interface ReasonArgs {
   system: string;
   prompt: string;
