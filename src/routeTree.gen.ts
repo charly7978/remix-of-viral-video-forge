@@ -10,18 +10,12 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as AuthRouteImport } from './routes/auth'
 import { Route as CorridaRunIdRouteImport } from './routes/corrida.$runId'
 import { Route as ApiPublicHooksProduceRouteImport } from './routes/api/public/hooks/produce'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AuthRoute = AuthRouteImport.update({
-  id: '/auth',
-  path: '/auth',
   getParentRoute: () => rootRouteImport,
 } as any)
 const CorridaRunIdRoute = CorridaRunIdRouteImport.update({
@@ -37,35 +31,30 @@ const ApiPublicHooksProduceRoute = ApiPublicHooksProduceRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/auth': typeof AuthRoute
   '/corrida/$runId': typeof CorridaRunIdRoute
   '/api/public/hooks/produce': typeof ApiPublicHooksProduceRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/auth': typeof AuthRoute
   '/corrida/$runId': typeof CorridaRunIdRoute
   '/api/public/hooks/produce': typeof ApiPublicHooksProduceRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/auth': typeof AuthRoute
   '/corrida/$runId': typeof CorridaRunIdRoute
   '/api/public/hooks/produce': typeof ApiPublicHooksProduceRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/auth' | '/corrida/$runId' | '/api/public/hooks/produce'
+  fullPaths: '/' | '/corrida/$runId' | '/api/public/hooks/produce'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/auth' | '/corrida/$runId' | '/api/public/hooks/produce'
-  id:
-    '__root__' | '/' | '/auth' | '/corrida/$runId' | '/api/public/hooks/produce'
+  to: '/' | '/corrida/$runId' | '/api/public/hooks/produce'
+  id: '__root__' | '/' | '/corrida/$runId' | '/api/public/hooks/produce'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AuthRoute: typeof AuthRoute
   CorridaRunIdRoute: typeof CorridaRunIdRoute
   ApiPublicHooksProduceRoute: typeof ApiPublicHooksProduceRoute
 }
@@ -77,13 +66,6 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/auth': {
-      id: '/auth'
-      path: '/auth'
-      fullPath: '/auth'
-      preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/corrida/$runId': {
@@ -105,10 +87,19 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AuthRoute: AuthRoute,
   CorridaRunIdRoute: CorridaRunIdRoute,
   ApiPublicHooksProduceRoute: ApiPublicHooksProduceRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
+
+import type { getRouter } from './router.tsx'
+import type { startInstance } from './start.ts'
+declare module '@tanstack/react-start' {
+  interface Register {
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
+    config: Awaited<ReturnType<typeof startInstance.getOptions>>
+  }
+}

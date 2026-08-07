@@ -1,15 +1,13 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect } from "react";
 import { toast } from "sonner";
 import { ArrowLeft, Copy, Film, RefreshCw } from "lucide-react";
 import { advanceVideo, getRun } from "@/lib/runs.functions";
-import { useSession } from "@/hooks/use-session";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-
 
 export const Route = createFileRoute("/corrida/$runId")({
   head: () => ({
@@ -43,20 +41,13 @@ function copy(value: string) {
 
 function RunDetail() {
   const { runId } = Route.useParams();
-  const navigate = useNavigate();
-  const { session, loading } = useSession();
   const queryClient = useQueryClient();
   const fetchRun = useServerFn(getRun);
   const pushVideo = useServerFn(advanceVideo);
 
-  useEffect(() => {
-    if (!loading && !session) void navigate({ to: "/auth" });
-  }, [loading, session, navigate]);
-
   const query = useQuery({
     queryKey: ["run", runId],
     queryFn: () => fetchRun({ data: { id: runId } }),
-    enabled: Boolean(session),
   });
 
   const runData = dict(query.data?.run);
@@ -291,7 +282,6 @@ function RunDetail() {
           ) : null}
         </TabsContent>
 
-
         <TabsContent value="guion" className="space-y-4">
           <Panel title="Gancho (0 a 3 segundos)">
             <Field label="Voz en off" value={text(hook["voz_en_off"])} />
@@ -423,22 +413,6 @@ function RunDetail() {
               label="Riesgo de desmonetización"
               value={text(monetizacion["riesgo_de_desmonetizacion"])}
             />
-          </Panel>
-          <Panel title="Video final">
-            {run["video_url"] ? (
-              <>
-                <Field label="URL del video" value={text(run["video_url"])} copyable />
-                <div className="mt-4">
-                  <video
-                    src={text(run["video_url"])}
-                    controls
-                    className="w-full rounded-md border border-border"
-                  />
-                </div>
-              </>
-            ) : (
-              <p className="text-sm text-muted-foreground">Video final no disponible o aún no generado.</p>
-            )}
           </Panel>
         </TabsContent>
 

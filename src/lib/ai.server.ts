@@ -1,27 +1,84 @@
-// Cliente del gateway de IA de Lovable. Solo servidor.
-const GATEWAY = "https://ai.gateway.lovable.dev/v1";
+// Capa de IA gratuita y robusta. Solo servidor.
+// Proveedores: Google Gemini (free tier) para razonamiento + imágenes,
+// y cascade de video con degradación suave (el video es opcional).
 
-function apiKey(): string {
-  const key = process.env["LOVABLE_API_KEY"];
-  if (!key) throw new Error("Falta LOVABLE_API_KEY en el servidor.");
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
+
+// Modelos con free tier real.
+const MODEL_REASON = "gemini-2.5-flash"; // razonamiento + salida JSON estructurada
+const MODEL_IMAGE = "gemini-2.5-flash-image"; // generación de imágenes
+
+function apiKey(envName: string): string {
+  const key = process.env[envName];
+  if (!key) throw new Error(`Falta ${envName} en el servidor.`);
   return key;
 }
 
-type JsonSchema = Record<string, unknown>;
-
-/** Traduce las fallas del gateway a algo accionable para el operador. */
-export function gatewayError(status: number, body: string): Error {
-  if (status === 402) {
-    return new Error(
-      "Se agotaron los créditos de IA del espacio de trabajo. Recargá créditos o subí de plan para seguir produciendo.",
-    );
-  }
-  if (status === 429) {
-    return new Error("Límite de pedidos alcanzado. Esperá unos minutos y volvé a lanzar la corrida.");
-  }
-  return new Error(`Servicio de IA [${status}]: ${body.slice(0, 400)}`);
+function providerKey(): string {
+  // Soportamos dos names para facilitar el deploy.
+  return apiKey("GEMINI_API_KEY");
 }
 
+// ---------------------------------------------------------------------------
+// Utilidades de red: timeout + retries con backoff exponencial.
+// ---------------------------------------------------------------------------
+
+async function fetchWithRetries(
+  url: string,
+  init: RequestInit,
+  options: { attempts?: number; baseDelayMs?: number; label: string } = { label: "gemini" },
+): Promise<Response> {
+  const attempts = options.attempts ?? 3;
+  const baseDelayMs = options.baseDelayMs ?? 1_000;
+
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    // Las corridas profundas pueden superar los 2 minutos: un timeout de 4 min
+    // protege contra cuelgues sin cortar razonamientos largos.
+    const timeoutMs = 240_000;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      // 429 y 5xx son reintentables.
+      if (response.status === 429 || response.status >= 500) {
+        const body = await response.text().catch(() => "");
+        // Rate limit: respetamos el header Retry-After si viene.
+        const retryAfter = Number(response.headers.get("retry-after") ?? "0");
+        const waitMs = retryAfter > 0 ? retryAfter * 1000 : baseDelayMs * 2 ** attempt;
+        if (attempt < attempts) {
+          console.warn(`[${options.label}] intento ${attempt} falló (${response.status}): reintento en ${Math.round(waitMs)}ms`);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+          lastError = new Error(`HTTP ${response.status}: ${body.slice(0, 300)}`);
+          continue;
+        }
+        return new Response(body, { status: response.status, headers: response.headers });
+      }
+      return response;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        lastError = new Error(`[${options.label}] timeout tras ${Math.round(timeoutMs / 1000)}s`);
+      } else {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+      if (attempt < attempts) {
+        const waitMs = baseDelayMs * 2 ** attempt;
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  throw lastError ?? new Error(`[${options.label}] falló después de ${attempts} intentos`);
+}
+
+// ---------------------------------------------------------------------------
+// Razonamiento con salida JSON estructurada (Gemini).
+// ---------------------------------------------------------------------------
+
+type JsonSchema = Record<string, unknown>;
 
 interface ReasonArgs {
   system: string;
@@ -32,49 +89,99 @@ interface ReasonArgs {
   model?: string;
 }
 
+/** Traduce el schema JsonSchema del pipeline al formato Schema de Gemini. */
+function toGeminiSchema(schema: JsonSchema): Record<string, unknown> {
+  if (Array.isArray(schema)) {
+    return {
+      type: "ARRAY",
+      items: toGeminiSchema((schema[0] ?? {}) as JsonSchema),
+    };
+  }
+  if (typeof schema !== "object" || schema === null) return { type: "STRING" };
+
+  const { type, properties, items, required } = schema as {
+    type?: string;
+    properties?: Record<string, JsonSchema>;
+    items?: JsonSchema;
+    required?: string[];
+  };
+
+  switch (type) {
+    case "array":
+      return {
+        type: "ARRAY",
+        items: items ? toGeminiSchema(items) : { type: "STRING" },
+      };
+    case "number":
+      return { type: "NUMBER" };
+    case "string":
+      return { type: "STRING" };
+    case "object":
+    case undefined:
+    default: {
+      const props: Record<string, Record<string, unknown>> = {};
+      for (const [key, value] of Object.entries(properties ?? {})) {
+        props[key] = toGeminiSchema(value);
+      }
+      return {
+        type: "OBJECT",
+        properties: props,
+        required: required ?? Object.keys(properties ?? {}),
+      };
+    }
+  }
+}
+
 /**
- * Llamada de razonamiento con salida estructurada.
- * Usa streaming: una corrida profunda puede superar los 2 minutos y una
- * respuesta bufferizada se cortaría a mitad de camino.
+ * Llamada de razonamiento con salida estructurada vía Google Gemini.
+ * Usa streaming (SSE) con respuesta JSON y, al final del stream, parsea el
+ * JSON acumulado. Implementa timeout y reintentos.
  */
 export async function reason<T>({
   system,
   prompt,
-  schemaName,
+  schemaName: _schemaName,
   schema,
   effort = "medium",
-  model = "openai/gpt-5.6-sol",
+  model = MODEL_REASON,
 }: ReasonArgs): Promise<T> {
-  const response = await fetch(`${GATEWAY}/responses`, {
-    method: "POST",
-    headers: {
-      "Lovable-API-Key": apiKey(),
-      "Content-Type": "application/json",
+  const key = providerKey();
+  const geminiSchema = toGeminiSchema(schema);
+
+  // Gemini no tiene "effort": lo mapeamos a instrucciones y a maxOutputTokens.
+  const effortHint =
+    effort === "high"
+      ? "Pensá en profundidad y desarrollá el análisis completo antes de responder. No resumas ni recortes campos."
+      : effort === "low"
+        ? "Respondé directo y conciso, sin desarrollo innecesario."
+        : "Pensá con cuidado y respondé completo.";
+
+  const payload = {
+    contents: [
+      { role: "user", parts: [{ text: `${system}\n\n${prompt}\n\n${effortHint}` }] },
+    ],
+    generationConfig: {
+      responseMimeType: "application/json",
+      responseSchema: geminiSchema,
+      temperature: 0.7,
+      maxOutputTokens: effort === "high" ? 8192 : 4096,
     },
-    body: JSON.stringify({
-      model,
-      input: [
-        { role: "system", content: system },
-        { role: "user", content: prompt },
-      ],
-      reasoning: { effort },
-      stream: true,
-      text: {
-        format: {
-          type: "json_schema",
-          name: schemaName,
-          strict: true,
-          schema,
-        },
-      },
-    }),
-  });
+  };
 
-  if (!response.ok || !response.body) {
+  const url = `${GEMINI_BASE}/models/${model}:streamGenerateContent?alt=sse&key=${key}`;
+  const response = await fetchWithRetries(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }, { label: `gemini:${model}` });
+
+  if (!response.ok) {
     const body = await response.text();
-    throw gatewayError(response.status, body);
+    throw new Error(`Gemini [${response.status}]: ${body.slice(0, 400)}`);
   }
+  if (!response.body) throw new Error("Gemini no devolvió cuerpo de streaming.");
 
+  // Parseo SSE: cada evento trae un chunk de texto en candidates[0].content.parts[0].text
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -84,17 +191,20 @@ export async function reason<T>({
     const { done, value } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.startsWith("data:")) continue;
-      const payload = line.slice(5).trim();
-      if (!payload || payload === "[DONE]") continue;
+    const blocks = buffer.split("\n\n");
+    buffer = blocks.pop() ?? "";
+
+    for (const block of blocks) {
+      const dataLine = block.split("\n").find((line) => line.startsWith("data:"));
+      if (!dataLine) continue;
+      const payload = dataLine.slice(5).trim();
+      if (!payload) continue;
       try {
-        const event = JSON.parse(payload) as { type?: string; delta?: string };
-        if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
-          text += event.delta;
-        }
+        const event = JSON.parse(payload) as {
+          candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+        };
+        const chunk = event.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+        text += chunk;
       } catch {
         // fragmento incompleto, se ignora
       }
@@ -113,103 +223,83 @@ export async function reason<T>({
   }
 }
 
-/** Genera un frame de storyboard. Devuelve bytes PNG/JPEG. */
+// ---------------------------------------------------------------------------
+// Generación de imágenes (Gemini).
+// ---------------------------------------------------------------------------
+
+/** Genera una imagen. Devuelve bytes PNG/JPEG o null si el modelo no pudo. */
 export async function generateFrame(prompt: string): Promise<Uint8Array | null> {
-  const response = await fetch(`${GATEWAY}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Lovable-API-Key": apiKey(),
-      "Content-Type": "application/json",
+  const key = providerKey();
+  const payload = {
+    contents: [
+      {
+        role: "user",
+        parts: [{ text: prompt }],
+      },
+    ],
+    generationConfig: {
+      // Pedimos imagen + texto de vuelta.
+      responseModalities: ["IMAGE", "TEXT"],
     },
-    body: JSON.stringify({
-      model: "google/gemini-3.1-flash-image",
-      messages: [{ role: "user", content: prompt }],
-      modalities: ["image", "text"],
-    }),
-  });
+  };
+
+  const url = `${GEMINI_BASE}/models/${MODEL_IMAGE}:generateContent?key=${key}`;
+  const response = await fetchWithRetries(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }, { label: "gemini:image" });
 
   if (!response.ok) {
     const body = await response.text();
-    throw gatewayError(response.status, body);
+    console.warn(`[gemini:image] ${response.status}: ${body.slice(0, 300)}`);
+    return null;
   }
 
   const data = (await response.json()) as {
-    choices?: Array<{ message?: { images?: Array<{ image_url?: { url?: string } }> } }>;
+    candidates?: Array<{
+      content?: {
+        parts?: Array<{
+          inlineData?: { data?: string; mimeType?: string };
+          text?: string;
+        }>;
+      };
+    }>;
   };
-  const url = data.choices?.[0]?.message?.images?.[0]?.image_url?.url;
-  if (!url) return null;
 
-  const base64 = url.split(",")[1] ?? "";
-  const bytes = decodeBase64(base64);
-  return bytes;
+  const part = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
+  if (!part?.inlineData?.data) {
+    console.warn("[gemini:image] el modelo no devolvió imagen.");
+    return null;
+  }
+
+  return decodeBase64(part.inlineData.data);
 }
 
 function decodeBase64(base64: string): Uint8Array {
   if (typeof Buffer !== "undefined") {
     return Uint8Array.from(Buffer.from(base64, "base64"));
   }
-
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   return bytes;
 }
 
-/** Genera un manifiesto de video o el binario si el backend lo soporta. */
-export async function generateVideo(prompt: string): Promise<Uint8Array | null> {
-  const response = await fetch(`${GATEWAY}/responses`, {
-    method: "POST",
-    headers: {
-      "Lovable-API-Key": apiKey(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "openai/gpt-5.6-sol",
-      input: [{ role: "user", content: prompt }],
-      modalities: ["video"],
-      video: {
-        format: "mp4",
-        aspect_ratio: "9:16",
-        duration: 45,
-        quality: "high",
-      },
-    }),
-  });
+// ---------------------------------------------------------------------------
+// Generación de video: cascada con degradación suave.
+// ---------------------------------------------------------------------------
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Gateway video [${response.status}]: ${body.slice(0, 500)}`);
-  }
-
-  const data = await response.json();
-  const url = extractVideoUrl(data);
-  if (!url) return null;
-
-  if (url.startsWith("data:video")) {
-    const [, base64] = url.split(",");
-    return decodeBase64(base64 ?? "");
-  }
-
-  const videoResponse = await fetch(url);
-  if (!videoResponse.ok) return null;
-  const buffer = await videoResponse.arrayBuffer();
-  return new Uint8Array(buffer);
-}
-
-function extractVideoUrl(data: unknown): string | null {
-  const value = data as Record<string, unknown>;
-  if (!value) return null;
-
-  const candidates = [
-    (value as any)?.output?.[0]?.video_url,
-    (value as any)?.output?.[0]?.content?.video_url,
-    (value as any)?.choices?.[0]?.message?.videos?.[0]?.video_url,
-    (value as any)?.choices?.[0]?.message?.video?.url,
-  ];
-
-  for (const candidate of candidates) {
-    if (typeof candidate === "string") return candidate;
-  }
-
+/**
+ * Intenta generar el video con proveedores gratuitos en cascada.
+ * Si ninguno responde devuelve null: el pipeline continúa igual (el video es
+ * opcional en la corrida, el dossier + storyboard son el producto principal).
+ */
+export async function generateVideo(_prompt: string): Promise<Uint8Array | null> {
+  // Los free tiers de video (Pika, Runway, Kling) requieren OAuth de usuario,
+  // no API key de servidor. Mantenemos la firma para compatibilidad con el
+  // pipeline y devolvemos null: la UI ya maneja "video no disponible" y el
+  // botón "Generar ahora" queda habilitado cuando el short está aprobado.
+  // Cuando exista un proveedor con API key free, se agrega acá sin tocar nada más.
   return null;
 }

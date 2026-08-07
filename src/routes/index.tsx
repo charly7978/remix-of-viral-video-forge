@@ -1,12 +1,9 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useEffect } from "react";
 import { toast } from "sonner";
 import { Activity, Flame, Play, Sparkles, Timer, TrendingUp } from "lucide-react";
 import { listRuns, startRun, type RunRow } from "@/lib/runs.functions";
-import { useSession } from "@/hooks/use-session";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
@@ -60,20 +57,13 @@ function StatusPill({ status }: { status: string }) {
 }
 
 function Dashboard() {
-  const navigate = useNavigate();
-  const { session, loading } = useSession();
   const queryClient = useQueryClient();
   const fetchRuns = useServerFn(listRuns);
   const trigger = useServerFn(startRun);
 
-  useEffect(() => {
-    if (!loading && !session) void navigate({ to: "/auth" });
-  }, [loading, session, navigate]);
-
   const runsQuery = useQuery({
     queryKey: ["runs"],
     queryFn: () => fetchRuns(),
-    enabled: Boolean(session),
     refetchInterval: 15_000,
   });
 
@@ -96,14 +86,6 @@ function Dashboard() {
       : 0;
   const lastViral = runs.find((run) => run.slot === "viral" && run.status === "done");
 
-  if (loading || !session) {
-    return (
-      <main className="flex min-h-screen items-center justify-center">
-        <p className="label-caps">Cargando sala de control…</p>
-      </main>
-    );
-  }
-
   return (
     <main className="mx-auto max-w-6xl px-4 py-10 md:px-8">
       <header className="flex flex-wrap items-start justify-between gap-6">
@@ -116,15 +98,6 @@ function Dashboard() {
             segundo a segundo, plano por plano y prompt maestro listo para el generador de video.
           </p>
         </div>
-        <Button
-          variant="ghost"
-          onClick={async () => {
-            await supabase.auth.signOut();
-            void navigate({ to: "/auth" });
-          }}
-        >
-          Salir
-        </Button>
       </header>
 
       <section className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -320,7 +293,6 @@ function RunRowCard({ run }: { run: RunRow }) {
           </div>
         ) : null}
       </div>
-
     </Link>
   );
 }

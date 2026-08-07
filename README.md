@@ -1,24 +1,60 @@
-# Remix of Viral Video Forge
+# Radar Viral AR — Remix of Viral Video Forge
 
-Quiero que construyas un avanzado y eficiente flujo de trabajo que consiste en agentes de inteligencia artificial dos veces al día hagan un estudio muy profundo, detallado, y completo de los videos mas virales del día (zona argentina) una vez detectado el tema más viral y caliente en visualizaciones, creen un avisos técnicos y detallados al máximo para crear un video corto para ser publicado en youtube y tick tok...este video debe ser también con caracter de viral, con impacto, enganche...etc...no quiero cosas basicas ni infantiles....el fin de todo esto es TOTALMENTE ECONOMICO, POR ENDE DEBE SER TRATADO CON SERIEDAD Y TOTAL COMPETENCIA....la creacion de los videos seran, dos al dia...el primero, debe ser producto del tema del momento peor CON MAS VISUALIZACIONES EN TODO EL PAIS!.....en base a eso, armar todo el promp para ser incluido en paginas de creacion de videos....el otro video debe ser de caracter interes general....PERO TAMBIEN DEBE LLEVATRL EL MISMO ENFOQUE QUE EL OTRO VIDEO, LOS TEMA SPUEDEN SER, HOROSCOPO..MITOS...EFEMERIDES...ETC..ETC...PERO TAMBIEN DEBE TENER MUY FUERTE IMPACTO Y LLEGADA.... ME GUSTARIA HACERLO EN N8N...SI ES POSIBLE
+Sistema automatizado de producción de shorts virales para **YouTube Shorts** y **TikTok**, enfocado en **Argentina**.
 
-This project was built with [Lovable](https://lovable.dev).
+Dos veces al día (vía scheduler externo como n8n) los agentes:
+1. **Sensan** las tendencias reales del país en vivo: YouTube (más vistos en AR), Google Trends Argentina y titulares de Google News.
+2. **Seleccionan** con IA el tema con más tracción real, priorizando velocidad de visualizaciones por hora sobre volumen acumulado, y detectan el mejor ángulo con ventana de oportunidad.
+3. **Escriben** un dossier técnico completo: gancho de 3 segundos, guion segundo a segundo (40-55s), arquitectura de retención, 12-18 planos con prompts de generación, audio, metadatos de publicación y plan de monetización.
+4. **Auditan** el resultado con un control de calidad automático (checklist mecánico + puntaje de IA) que decide si se aprueba o se reescribe.
+5. **Renderizan** el storyboard (frames de IA) y encolan el video vertical final.
 
-## Build with Lovable
+## Cómo funciona
 
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/0245517e-dc30-433c-a452-c3217840db67).
+- **Dashboard**: panel de operaciones con métricas, disparo manual de producción y historial.
+- **Webhook público** `POST /api/public/hooks/produce` para el disparador programado (n8n, cron, etc.). Se autentica con el header `x-scheduler-secret` (ver `SCHEDULER_HOOK_SECRET`).
+- **Sin login**: el panel es de acceso directo. Bloquea el acceso público a nivel de red si lo desplegás a Internet.
 
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
+## Stack
 
-## Development
+- **Frontend/backend**: TanStack Start (React 19 + Nitro) con Vite.
+- **Base de datos + storage**: Supabase (PostgreSQL + buckets `storyboards` y `videos`).
+- **IA (gratuita)**: Google Gemini — razonamiento con salida JSON estructurada (`gemini-2.5-flash`) e imágenes (`gemini-2.5-flash-image`). Sin cuotas de ningún gateway: usás tu propia clave de Google AI Studio.
 
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+## Requisitos
+
+- Node.js 20+ (o Bun) y una cuenta en [Google AI Studio](https://aistudio.google.com/apikey) para la clave `GEMINI_API_KEY`.
+- Clave de YouTube Data API v3 (opcional pero muy recomendada) para el sensado de tendencias.
+- Proyecto Supabase con las tablas y buckets descritos en `supabase/migrations/`.
+
+## Configuración
+
+1. Cloná el repo y copiá `.env.example` a `.env`, completando las claves.
+2. Instalá dependencias: `npm i` (o `bun install`).
+3. Levantá el servidor de desarrollo: `npm run dev`.
+
+Variables de entorno:
+
+| Variable | Descripción |
+| --- | --- |
+| `SUPABASE_URL` / `VITE_SUPABASE_URL` | URL del proyecto Supabase |
+| `SUPABASE_PUBLISHABLE_KEY` / `VITE_SUPABASE_PUBLISHABLE_KEY` | Anon/publishable key |
+| `GEMINI_API_KEY` | Clave de Google AI Studio (razonamiento + imágenes) |
+| `YOUTUBE_API_KEY` | Clave de YouTube Data API v3 (sensado de tendencias) |
+| `SCHEDULER_HOOK_SECRET` | Secreto del webhook de producción programada |
+
+## Scripts
 
 ```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
-npm run dev
+npm run dev        # desarrollo
+npm run build      # build de producción
+npm run lint       # eslint
+npm run format     # prettier
 ```
+
+## Scripts de producción programada (n8n)
+
+Para producir "el tema del momento" a las 09:00 y 18:00 (hora Argentina) con n8n:
+
+1. Workflow con nodo **Schedule Trigger** (CRON `0 9 * * *` y `0 18 * * *` en `America/Argentina/Buenos_Aires`).
+2. Nodo **HTTP Request**: `POST /api/public/hooks/produce` con header `x-scheduler-secret: <tu secreto>` y body `{"slot":"viral"}` (o `"general"` para la segunda corrida).
