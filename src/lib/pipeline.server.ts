@@ -1,6 +1,6 @@
 // Orquestador de la producción diaria. Solo servidor.
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
-import { generateFrame, reason } from "./ai.server";
+import { generateFrame, generateVideo, reason } from "./ai.server";
 import { asBriefing, sense, type TrendItem } from "./trends.server";
 
 export type Slot = "viral" | "general";
@@ -182,6 +182,8 @@ Reglas duras:
   });
 }
 
+const VIDEO_BUCKET = "videos";
+
 async function renderStoryboard(
   runId: string,
   planos: Array<{ numero?: number; prompt_generacion?: string }>,
@@ -208,6 +210,51 @@ async function renderStoryboard(
   }
 
   return frames;
+}
+
+async function saveVideo(runId: string, bytes: Uint8Array): Promise<string | null> {
+  const path = `${runId}/final.mp4`;
+  const { error } = await supabaseAdmin.storage
+    .from(VIDEO_BUCKET)
+    .upload(path, bytes, { contentType: "video/mp4", upsert: true });
+  if (error) {
+    console.error("Error al guardar video:", error.message);
+    return null;
+  }
+  return path;
+}
+
+async function renderVideo(runId: string, basePrompt: string): Promise<string | null> {
+  if (!basePrompt) return null;
+  try {
+    const videoPrompt = `${basePrompt}
+
+Produce a high-quality 9:16 short-form video in MP4 format. Use cinematic lighting, crisp motion, and polished art direction suitable for YouTube Shorts and TikTok. Output a direct video asset or a signed URL if available.`;
+    const videoBytes = await generateVideo(videoPrompt);
+    if (!videoBytes) return null;
+    return await saveVideo(runId, videoBytes);
+  } catch (error) {
+    console.error("Falló la generación de video:", error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+async function reviewDossier(dossier: Record<string, unknown>): Promise<string[]> {
+  const reviewSchema = {
+    type: "array",
+    items: str,
+  };
+
+  return reason<string[]>({
+    system: ESTRATEGA,
+    schemaName: "qa_notes",
+    schema: reviewSchema,
+    effort: "medium",
+    prompt: `Revisá el siguiente dossier técnico para detectar fallas de formato, debilidades de guion, problemas de ritmo, riesgos de monetización y oportunidades de mejora para un short de alto impacto.
+
+Dossier:
+${JSON.stringify(dossier, null, 2)}`,
+  });
 }
 
 export async function runProduction(slot: Slot, triggeredBy: string): Promise<string> {
@@ -243,18 +290,29 @@ export async function runProduction(slot: Slot, triggeredBy: string): Promise<st
       .eq("id", runId);
 
     const dossier = await escribirDossier(slot, seleccion);
+    const reviewNotes = await reviewDossier(dossier);
+    const dossierFinal = {
+      ...dossier,
+      seleccion: { ...seleccion },
+      avisos: warnings,
+      control_de_calidad: Array.isArray(dossier["control_de_calidad"])
+        ? [...(dossier["control_de_calidad"] as string[]), ...reviewNotes]
+        : reviewNotes,
+    } as Record<string, unknown>;
 
     await supabaseAdmin.from("runs").update({ status: "rendering" }).eq("id", runId);
-    const planos = (dossier["planos"] ?? []) as Array<{ numero?: number; prompt_generacion?: string }>;
+    const planos = (dossierFinal["planos"] ?? []) as Array<{ numero?: number; prompt_generacion?: string }>;
     const storyboard = await renderStoryboard(runId, planos);
+    const videoPath = await renderVideo(runId, String(dossierFinal["prompt_maestro_video"] ?? ""));
 
     await supabaseAdmin
       .from("runs")
       .update({
         status: "done",
-        dossier: { ...dossier, seleccion: { ...seleccion }, avisos: warnings } as never,
-        master_prompt: String(dossier["prompt_maestro_video"] ?? ""),
+        dossier: dossierFinal as never,
+        master_prompt: String(dossierFinal["prompt_maestro_video"] ?? ""),
         storyboard,
+        video_url: videoPath,
         duration_ms: Date.now() - started,
       })
       .eq("id", runId);
@@ -277,7 +335,7 @@ async function guardarCandidatos(runId: string, items: TrendItem[]): Promise<voi
     channel: item.channel,
     views: item.views,
     velocity: item.velocity,
-    score: item.velocity ?? item.views,
+    score: item.score,
     source: item.source,
     url: item.url,
   }));

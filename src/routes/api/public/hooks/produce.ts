@@ -9,8 +9,9 @@ export const Route = createFileRoute("/api/public/hooks/produce")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const provided = request.headers.get("apikey");
-        const expected = process.env["SUPABASE_PUBLISHABLE_KEY"];
+        const provided =
+          request.headers.get("x-scheduler-secret") ?? request.headers.get("apikey");
+        const expected = process.env["SCHEDULER_HOOK_SECRET"];
 
         if (!expected || !provided || provided !== expected) {
           return Response.json({ error: "No autorizado" }, { status: 401 });

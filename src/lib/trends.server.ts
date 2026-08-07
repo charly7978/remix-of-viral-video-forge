@@ -5,8 +5,10 @@ export interface TrendItem {
   channel: string | null;
   views: number;
   velocity: number | null;
-  url: string | null;
+  score: number;
   source: "youtube" | "google_trends" | "news";
+  source_weight: number;
+  url: string | null;
   publishedAt?: string;
   description?: string;
 }
@@ -19,7 +21,32 @@ function hoursSince(iso: string | undefined): number {
   return diff > 0.5 ? diff : 0.5;
 }
 
-/** Videos en tendencia en Argentina, ordenados por velocidad de visualizaciones. */
+function sourceWeight(source: TrendItem["source"]): number {
+  switch (source) {
+    case "youtube":
+      return 1.4;
+    case "google_trends":
+      return 1.1;
+    case "news":
+      return 0.9;
+  }
+}
+
+function scoreYouTube(views: number, velocity: number): number {
+  return Math.round(velocity * 0.7 + views * 0.05 + Math.log10(Math.max(views, 1)) * 10);
+}
+
+function scoreRss(traffic: number, source: TrendItem["source"]): number {
+  return Math.round(traffic * (source === "google_trends" ? 0.8 : 0.5));
+}
+
+function buildTrendItem(item: Omit<TrendItem, "score">): TrendItem {
+  return {
+    ...item,
+    score: Math.round(item.source_weight * (item.velocity ?? item.views) + (item.velocity ?? 0) * 0.15),
+  };
+}
+
 export async function fetchYouTubeTrending(): Promise<TrendItem[]> {
   const key = process.env["YOUTUBE_API_KEY"];
   if (!key) return [];
@@ -49,18 +76,21 @@ export async function fetchYouTubeTrending(): Promise<TrendItem[]> {
   return (data.items ?? [])
     .map((item) => {
       const views = Number(item.statistics.viewCount ?? 0);
-      return {
+      const velocity = Math.round(views / hoursSince(item.snippet.publishedAt));
+      return buildTrendItem({
         title: item.snippet.title,
         channel: item.snippet.channelTitle,
         views,
-        velocity: Math.round(views / hoursSince(item.snippet.publishedAt)),
+        velocity,
+        source: "youtube",
+        source_weight: sourceWeight("youtube"),
         url: `https://www.youtube.com/watch?v=${item.id}`,
-        source: "youtube" as const,
         publishedAt: item.snippet.publishedAt,
         description: item.snippet.description.slice(0, 400),
-      };
+      });
     })
-    .sort((a, b) => (b.velocity ?? 0) - (a.velocity ?? 0));
+    .filter((item) => item.views > 0)
+    .sort((a, b) => b.score - a.score);
 }
 
 function decodeEntities(value: string): string {
@@ -86,13 +116,16 @@ function parseRss(xml: string, source: TrendItem["source"], limit: number): Tren
     const traffic = trafficMatch?.[1]
       ? Number(decodeEntities(trafficMatch[1]).replace(/[^\d]/g, ""))
       : 0;
+    const score = scoreRss(traffic, source);
     items.push({
       title: decodeEntities(titleMatch[1] ?? ""),
       channel: null,
       views: traffic,
       velocity: null,
-      url: linkMatch?.[1] ? decodeEntities(linkMatch[1]) : null,
+      score,
       source,
+      source_weight: sourceWeight(source),
+      url: linkMatch?.[1] ? decodeEntities(linkMatch[1]) : null,
     });
   }
   return items;
@@ -141,24 +174,26 @@ export async function sense(): Promise<{ items: TrendItem[]; warnings: string[] 
     );
   }
 
-  return { items: [...youtube, ...trends, ...news], warnings };
+  const items = [...youtube, ...trends, ...news].sort((a, b) => b.score - a.score);
+  return { items, warnings };
 }
 
 export function asBriefing(items: TrendItem[]): string {
-  const bySource = (source: TrendItem["source"]) => items.filter((item) => item.source === source);
-  const yt = bySource("youtube")
-    .slice(0, 30)
-    .map(
-      (item, index) =>
-        `${index + 1}. [${item.views.toLocaleString("es-AR")} vistas | ${(item.velocity ?? 0).toLocaleString("es-AR")} vistas/h] ${item.title} — ${item.channel}`,
-    )
-    .join("\n");
-  const gt = bySource("google_trends")
-    .map((item) => `- ${item.title}${item.views ? ` (~${item.views.toLocaleString("es-AR")} búsquedas)` : ""}`)
-    .join("\n");
-  const nw = bySource("news")
-    .map((item) => `- ${item.title}`)
-    .join("\n");
+  const bySource = (source: TrendItem["source"]) =>
+    items
+      .filter((item) => item.source === source)
+      .slice(0, 30)
+      .map((item, index) => {
+        const score = `score ${item.score}`;
+        if (source === "youtube") {
+          return `${index + 1}. [${item.views.toLocaleString("es-AR")} vistas | ${(item.velocity ?? 0).toLocaleString("es-AR")} vistas/h | ${score}] ${item.title} — ${item.channel}`;
+        }
+        return `${index + 1}. [${score}] ${item.title}${item.views ? ` (~${item.views.toLocaleString("es-AR")} estimado)` : ""}`;
+      });
+
+  const yt = bySource("youtube").join("\n");
+  const gt = bySource("google_trends").join("\n");
+  const nw = bySource("news").join("\n");
 
   return [
     "== YOUTUBE ARGENTINA / MÁS VISTOS AHORA ==",

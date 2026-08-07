@@ -240,6 +240,22 @@ function RunDetail() {
               value={text(monetizacion["riesgo_de_desmonetizacion"])}
             />
           </Panel>
+          <Panel title="Video final">
+            {run["video_url"] ? (
+              <>
+                <Field label="URL del video" value={text(run["video_url"])} copyable />
+                <div className="mt-4">
+                  <video
+                    src={text(run["video_url"])}
+                    controls
+                    className="w-full rounded-md border border-border"
+                  />
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">Video final no disponible o aún no generado.</p>
+            )}
+          </Panel>
         </TabsContent>
 
         <TabsContent value="inteligencia" className="space-y-4">

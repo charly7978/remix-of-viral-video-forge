@@ -61,7 +61,15 @@ export const getRun = createServerFn({ method: "POST" })
       if (signed?.signedUrl) frames.push({ numero: frame.numero, url: signed.signedUrl });
     }
 
-    return { run, candidates: candidates ?? [], frames };
+    let videoUrl = typeof run.video_url === "string" ? run.video_url : null;
+    if (videoUrl && !videoUrl.startsWith("http")) {
+      const { data: signedVideo } = await context.supabase.storage
+        .from("videos")
+        .createSignedUrl(videoUrl, 3600);
+      if (signedVideo?.signedUrl) videoUrl = signedVideo.signedUrl;
+    }
+
+    return { run: { ...run, video_url: videoUrl }, candidates: candidates ?? [], frames };
   });
 
 export const startRun = createServerFn({ method: "POST" })

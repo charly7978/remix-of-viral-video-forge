@@ -126,8 +126,76 @@ export async function generateFrame(prompt: string): Promise<Uint8Array | null> 
   if (!url) return null;
 
   const base64 = url.split(",")[1] ?? "";
+  const bytes = decodeBase64(base64);
+  return bytes;
+}
+
+function decodeBase64(base64: string): Uint8Array {
+  if (typeof Buffer !== "undefined") {
+    return Uint8Array.from(Buffer.from(base64, "base64"));
+  }
+
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   return bytes;
+}
+
+/** Genera un manifiesto de video o el binario si el backend lo soporta. */
+export async function generateVideo(prompt: string): Promise<Uint8Array | null> {
+  const response = await fetch(`${GATEWAY}/responses`, {
+    method: "POST",
+    headers: {
+      "Lovable-API-Key": apiKey(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "openai/gpt-5.6-sol",
+      input: [{ role: "user", content: prompt }],
+      modalities: ["video"],
+      video: {
+        format: "mp4",
+        aspect_ratio: "9:16",
+        duration: 45,
+        quality: "high",
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Gateway video [${response.status}]: ${body.slice(0, 500)}`);
+  }
+
+  const data = await response.json();
+  const url = extractVideoUrl(data);
+  if (!url) return null;
+
+  if (url.startsWith("data:video")) {
+    const [, base64] = url.split(",");
+    return decodeBase64(base64 ?? "");
+  }
+
+  const videoResponse = await fetch(url);
+  if (!videoResponse.ok) return null;
+  const buffer = await videoResponse.arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
+function extractVideoUrl(data: unknown): string | null {
+  const value = data as Record<string, unknown>;
+  if (!value) return null;
+
+  const candidates = [
+    (value as any)?.output?.[0]?.video_url,
+    (value as any)?.output?.[0]?.content?.video_url,
+    (value as any)?.choices?.[0]?.message?.videos?.[0]?.video_url,
+    (value as any)?.choices?.[0]?.message?.video?.url,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") return candidate;
+  }
+
+  return null;
 }
