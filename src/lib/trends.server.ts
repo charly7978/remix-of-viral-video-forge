@@ -197,6 +197,9 @@ export function asBriefing(items: TrendItem[]): string {
     .join("\n");
 
   return [
+    "== SEÑALES AGRUPADAS / DÓNDE ESTÁ EL CALOR REAL ==",
+    keywordClusters(items).join("\n") || "(sin coincidencias)",
+    "",
     "== YOUTUBE ARGENTINA / MÁS VISTOS AHORA ==",
     yt || "(sin datos)",
     "",
@@ -206,4 +209,5 @@ export function asBriefing(items: TrendItem[]): string {
     "== TITULARES DEL DÍA (ARGENTINA) ==",
     nw || "(sin datos)",
   ].join("\n");
+
 }
