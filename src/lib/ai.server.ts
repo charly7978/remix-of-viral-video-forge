@@ -1,23 +1,19 @@
 // Capa de IA gratuita y robusta. Solo servidor.
-// Proveedores: Google Gemini (free tier) para razonamiento + imágenes,
-// y cascade de video con degradación suave (el video es opcional).
+// Razonamiento: cascada Groq (primario) → OpenRouter :free (fallback).
+// Imágenes: Pollinations.ai (sin API key).
+// Video: se maneja en video.server.ts con degradación suave (es opcional).
 
-const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
+const GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions";
+const OPENROUTER_BASE = "https://openrouter.ai/api/v1/chat/completions";
+const POLLINATIONS = "https://image.pollinations.ai/prompt/";
 
-// Modelos con free tier real.
-const MODEL_REASON = "gemini-2.0-flash"; // razonamiento + salida JSON estructurada
-const MODEL_IMAGE = "gemini-2.5-flash-image"; // generación de imágenes
+// Modelos free con buen comportamiento de JSON.
+const MODEL_GROQ = "llama-3.3-70b-versatile";
+const MODEL_OPENROUTER = "meta-llama/llama-3.3-70b-instruct:free";
 
-function apiKey(envName: string): string {
-  const key = process.env[envName];
-  if (!key) throw new Error(`Falta ${envName} en el servidor.`);
-  return key;
-}
-
-function providerKey(): string {
-  // Soportamos dos names para facilitar el deploy.
-  return apiKey("GEMINI_API_KEY");
-}
+// Tamaño del storyboard en píxeles (vertical 9:16, liviano para descargar rápido).
+const FRAME_WIDTH = 540;
+const FRAME_HEIGHT = 960;
 
 // ---------------------------------------------------------------------------
 // Utilidades de red: timeout + retries con backoff exponencial.
@@ -26,7 +22,7 @@ function providerKey(): string {
 async function fetchWithRetries(
   url: string,
   init: RequestInit,
-  options: { attempts?: number; baseDelayMs?: number; label: string } = { label: "gemini" },
+  options: { attempts?: number; baseDelayMs?: number; label: string } = { label: "ia" },
 ): Promise<Response> {
   const attempts = options.attempts ?? 3;
   const baseDelayMs = options.baseDelayMs ?? 1_000;
@@ -82,10 +78,64 @@ async function fetchWithRetries(
 }
 
 // ---------------------------------------------------------------------------
-// Razonamiento con salida JSON estructurada (Gemini).
+// Validación determinista de la forma JSON antes de dársela al pipeline.
 // ---------------------------------------------------------------------------
 
 type JsonSchema = Record<string, unknown>;
+
+function validateShape(schema: JsonSchema, value: unknown, ruta = "$"): void {
+  if (Array.isArray(schema)) {
+    if (!Array.isArray(value)) throw new Error(`Se esperaba un array en ${ruta}.`);
+    const itemSchema = (schema[0] ?? {}) as JsonSchema;
+    for (let i = 0; i < value.length; i += 1) validateShape(itemSchema, value[i], `${ruta}[${i}]`);
+    return;
+  }
+
+  if (typeof schema !== "object" || schema === null) return;
+
+  const { type, properties, items } = schema as {
+    type?: string;
+    properties?: Record<string, JsonSchema>;
+    items?: JsonSchema;
+  };
+
+  switch (type) {
+    case "object":
+    case undefined: {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new Error(`Se esperaba un objeto en ${ruta}.`);
+      }
+      const record = value as Record<string, unknown>;
+      for (const key of Object.keys(properties ?? {})) {
+        if (!(key in record)) throw new Error(`Falta la clave "${key}" en ${ruta}.`);
+        validateShape((properties ?? {})[key]!, record[key], `${ruta}.${key}`);
+      }
+      return;
+    }
+    case "array": {
+      if (!Array.isArray(value)) throw new Error(`Se esperaba un array en ${ruta}.`);
+      for (let i = 0; i < value.length; i += 1)
+        validateShape((items ?? {}) as JsonSchema, value[i], `${ruta}[${i}]`);
+      return;
+    }
+    case "string":
+      if (typeof value !== "string") throw new Error(`Se esperaba un texto en ${ruta}.`);
+      return;
+    case "number":
+      if (typeof value !== "number" || Number.isNaN(value))
+        throw new Error(`Se esperaba un número en ${ruta}.`);
+      return;
+    case "boolean":
+      if (typeof value !== "boolean") throw new Error(`Se esperaba un booleano en ${ruta}.`);
+      return;
+    default:
+      return;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Razonamiento con salida JSON estructurada: cascada Groq → OpenRouter.
+// ---------------------------------------------------------------------------
 
 interface ReasonArgs {
   system: string;
@@ -96,53 +146,79 @@ interface ReasonArgs {
   model?: string;
 }
 
-/** Traduce el schema JsonSchema del pipeline al formato Schema de Gemini. */
-function toGeminiSchema(schema: JsonSchema): Record<string, unknown> {
-  if (Array.isArray(schema)) {
-    return {
-      type: "ARRAY",
-      items: toGeminiSchema((schema[0] ?? {}) as JsonSchema),
-    };
-  }
-  if (typeof schema !== "object" || schema === null) return { type: "STRING" };
+interface ChatResponse {
+  choices?: Array<{ message?: { content?: string } }>;
+  error?: { message?: string };
+}
 
-  const { type, properties, items, required } = schema as {
-    type?: string;
-    properties?: Record<string, JsonSchema>;
-    items?: JsonSchema;
-    required?: string[];
-  };
+function toOpenAIMessages(system: string, prompt: string, effortHint: string) {
+  return [
+    { role: "system", content: system },
+    {
+      role: "user",
+      content: `${prompt}\n\n${effortHint}\n\nIMPORTANTE: Respondé ÚNICAMENTE con un objeto JSON válido que respete el esquema pedido. No agregues texto, markdown ni comentarios fuera del JSON.`,
+    },
+  ];
+}
 
-  switch (type) {
-    case "array":
-      return {
-        type: "ARRAY",
-        items: items ? toGeminiSchema(items) : { type: "STRING" },
-      };
-    case "number":
-      return { type: "NUMBER" };
-    case "string":
-      return { type: "STRING" };
-    case "object":
-    case undefined:
-    default: {
-      const props: Record<string, Record<string, unknown>> = {};
-      for (const [key, value] of Object.entries(properties ?? {})) {
-        props[key] = toGeminiSchema(value);
-      }
-      return {
-        type: "OBJECT",
-        properties: props,
-        required: required ?? Object.keys(properties ?? {}),
-      };
-    }
+function parseJsonContent(content: string): unknown {
+  const trimmed = content.trim();
+  // Quita fences de markdown si el modelo los agregó igual.
+  const sinFences = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  try {
+    return JSON.parse(sinFences);
+  } catch {
+    const start = sinFences.indexOf("{");
+    const end = sinFences.lastIndexOf("}");
+    if (start >= 0 && end > start) return JSON.parse(sinFences.slice(start, end + 1));
+    throw new Error("Respuesta del modelo ilegible.");
   }
 }
 
+async function chatWithProvider(
+  baseUrl: string,
+  model: string,
+  apiKeyHeader: string,
+  messages: Array<{ role: string; content: string }>,
+  maxTokens: number,
+  label: string,
+): Promise<string> {
+  const response = await fetchWithRetries(
+    baseUrl,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: apiKeyHeader,
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0.7,
+        max_tokens: maxTokens,
+        response_format: { type: "json_object" },
+      }),
+    },
+    { label },
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`${label} [${response.status}]: ${body.slice(0, 400)}`);
+  }
+
+  const data = (await response.json()) as ChatResponse;
+  if (data.error?.message) throw new Error(`${label}: ${data.error.message}`);
+  const content = data.choices?.[0]?.message?.content;
+  if (!content?.trim()) throw new Error(`${label}: el modelo no devolvió contenido.`);
+  return content;
+}
+
 /**
- * Llamada de razonamiento con salida estructurada vía Google Gemini.
- * Usa streaming (SSE) con respuesta JSON y, al final del stream, parsea el
- * JSON acumulado. Implementa timeout y reintentos.
+ * Llamada de razonamiento con salida JSON estructurada.
+ * Intenta Groq; si falla (sin clave, cuota, timeout), prueba OpenRouter :free.
+ * Si ambos fallan, lanza el último error. Valida la forma del JSON antes de
+ * devolverlo para que el pipeline nunca reciba datos a medias.
  */
 export async function reason<T>({
   system,
@@ -150,169 +226,105 @@ export async function reason<T>({
   schemaName: _schemaName,
   schema,
   effort = "medium",
-  model = MODEL_REASON,
+  model: _model,
 }: ReasonArgs): Promise<T> {
-  const key = providerKey();
-  const geminiSchema = toGeminiSchema(schema);
-
-  // Gemini no tiene "effort": lo mapeamos a instrucciones y a maxOutputTokens.
   const effortHint =
     effort === "high"
       ? "Pensá en profundidad y desarrollá el análisis completo antes de responder. No resumas ni recortes campos."
       : effort === "low"
         ? "Respondé directo y conciso, sin desarrollo innecesario."
         : "Pensá con cuidado y respondé completo.";
+  const maxTokens = effort === "high" ? 8192 : 4096;
+  const messages = toOpenAIMessages(system, prompt, effortHint);
 
-  const payload = {
-    contents: [{ role: "user", parts: [{ text: `${system}\n\n${prompt}\n\n${effortHint}` }] }],
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: geminiSchema,
-      temperature: 0.7,
-      maxOutputTokens: effort === "high" ? 8192 : 4096,
-    },
-  };
+  const groqKey = process.env["GROQ_API_KEY"];
+  const openRouterKey = process.env["OPENROUTER_API_KEY"];
 
-  const url = `${GEMINI_BASE}/models/${model}:streamGenerateContent?alt=sse&key=${key}`;
-  const response = await fetchWithRetries(
-    url,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    { label: `gemini:${model}` },
-  );
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Gemini [${response.status}]: ${body.slice(0, 400)}`);
+  const intentos: Array<() => Promise<string>> = [];
+  if (groqKey)
+    intentos.push(() =>
+      chatWithProvider(GROQ_BASE, MODEL_GROQ, `Bearer ${groqKey}`, messages, maxTokens, "groq"),
+    );
+  if (openRouterKey) {
+    intentos.push(() =>
+      chatWithProvider(
+        OPENROUTER_BASE,
+        MODEL_OPENROUTER,
+        `Bearer ${openRouterKey}`,
+        [
+          ...messages,
+          {
+            role: "user",
+            content:
+              "Si el modelo anterior no respondió o se quedó sin cuota, respondé vos con el mismo JSON.",
+          },
+        ],
+        maxTokens,
+        "openrouter",
+      ),
+    );
   }
-  if (!response.body) throw new Error("Gemini no devolvió cuerpo de streaming.");
 
-  // Parseo SSE: cada evento trae un chunk de texto en candidates[0].content.parts[0].text
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let text = "";
+  if (intentos.length === 0) {
+    throw new Error(
+      "No hay claves de IA configuradas: falta GROQ_API_KEY u OPENROUTER_API_KEY en el servidor.",
+    );
+  }
 
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const blocks = buffer.split("\n\n");
-    buffer = blocks.pop() ?? "";
-
-    for (const block of blocks) {
-      const dataLine = block.split("\n").find((line) => line.startsWith("data:"));
-      if (!dataLine) continue;
-      const payload = dataLine.slice(5).trim();
-      if (!payload) continue;
-      try {
-        const event = JSON.parse(payload) as {
-          candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-        };
-        const chunk = event.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-        text += chunk;
-      } catch {
-        // fragmento incompleto, se ignora
-      }
+  let ultimoError: Error | null = null;
+  for (const intento of intentos) {
+    try {
+      const content = await intento();
+      const parsed = parseJsonContent(content);
+      validateShape(schema, parsed);
+      return parsed as T;
+    } catch (error) {
+      ultimoError = error instanceof Error ? error : new Error(String(error));
+      console.warn(`[ia] proveedor falló: ${ultimoError.message}`);
     }
   }
 
-  if (!text.trim()) throw new Error("El modelo no devolvió contenido.");
+  throw ultimoError ?? new Error("Todas las llamadas de IA fallaron.");
+}
+
+// ---------------------------------------------------------------------------
+// Generación de imágenes (Pollinations, sin API key).
+// ---------------------------------------------------------------------------
+
+/** Genera una imagen de storyboard. Devuelve bytes PNG o null si no pudo. */
+export async function generateFrame(prompt: string): Promise<Uint8Array | null> {
+  const url = `${POLLINATIONS}${encodeURIComponent(
+    `${prompt}. Vertical 9:16 short-form video frame, cinematic, high contrast, no watermark, no text`,
+  )}?width=${FRAME_WIDTH}&height=${FRAME_HEIGHT}&nologo=true&model=flux`;
 
   try {
-    return JSON.parse(text) as T;
-  } catch {
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-    if (start >= 0 && end > start) return JSON.parse(text.slice(start, end + 1)) as T;
-    throw new Error("Respuesta del modelo ilegible.");
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Generación de imágenes (Gemini).
-// ---------------------------------------------------------------------------
-
-/** Genera una imagen. Devuelve bytes PNG/JPEG o null si el modelo no pudo. */
-export async function generateFrame(prompt: string): Promise<Uint8Array | null> {
-  const key = providerKey();
-  const payload = {
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: prompt }],
-      },
-    ],
-    generationConfig: {
-      // Pedimos imagen + texto de vuelta.
-      responseModalities: ["IMAGE", "TEXT"],
-    },
-  };
-
-  const url = `${GEMINI_BASE}/models/${MODEL_IMAGE}:generateContent?key=${key}`;
-  const response = await fetchWithRetries(
-    url,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-    { label: "gemini:image" },
-  );
-
-  if (!response.ok) {
-    const body = await response.text();
-    console.warn(`[gemini:image] ${response.status}: ${body.slice(0, 300)}`);
+    const response = await fetchWithRetries(url, { method: "GET" }, { label: "pollinations" });
+    if (!response.ok) {
+      console.warn(`[pollinations] ${response.status}: no se pudo generar la imagen.`);
+      return null;
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  } catch (error) {
+    console.warn(
+      `[pollinations] no se pudo generar la imagen: ${error instanceof Error ? error.message : String(error)}`,
+    );
     return null;
   }
-
-  const data = (await response.json()) as {
-    candidates?: Array<{
-      content?: {
-        parts?: Array<{
-          inlineData?: { data?: string; mimeType?: string };
-          text?: string;
-        }>;
-      };
-    }>;
-  };
-
-  const part = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
-  if (!part?.inlineData?.data) {
-    console.warn("[gemini:image] el modelo no devolvió imagen.");
-    return null;
-  }
-
-  return decodeBase64(part.inlineData.data);
-}
-
-function decodeBase64(base64: string): Uint8Array {
-  if (typeof Buffer !== "undefined") {
-    return Uint8Array.from(Buffer.from(base64, "base64"));
-  }
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
 }
 
 // ---------------------------------------------------------------------------
-// Generación de video: cascada con degradación suave.
+// Generación de video: degradación suave (sin proveedor gratis con API).
 // ---------------------------------------------------------------------------
 
 /**
  * Intenta generar el video con proveedores gratuitos en cascada.
  * Si ninguno responde devuelve null: el pipeline continúa igual (el video es
- * opcional en la corrida, el dossier + storyboard son el producto principal).
+ * opcional; el dossier + storyboard son el producto principal). El render
+ * real del video se maneja en video.server.ts (admite Veo con GEMINI_API_KEY).
  */
 export async function generateVideo(_prompt: string): Promise<Uint8Array | null> {
   // Los free tiers de video (Pika, Runway, Kling) requieren OAuth de usuario,
-  // no API key de servidor. Mantenemos la firma para compatibilidad con el
-  // pipeline y devolvemos null: la UI ya maneja "video no disponible" y el
-  // botón "Generar ahora" queda habilitado cuando el short está aprobado.
-  // Cuando exista un proveedor con API key free, se agrega acá sin tocar nada más.
+  // no API key de servidor. Mantenemos la firma para compatibilidad y
+  // devolvemos null: la UI ya maneja "video no disponible".
   return null;
 }

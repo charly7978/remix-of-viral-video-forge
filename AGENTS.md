@@ -4,7 +4,10 @@
 
 - **Framework**: TanStack Start (React 19) con Vite y Nitro (SSR).
 - **Base de datos + storage**: Supabase (PostgreSQL, buckets `storyboards` y `videos`).
-- **IA gratuita**: Google Gemini — razonamiento con salida JSON estructurada (`gemini-2.0-flash`), imágenes (`gemini-2.5-flash-image`) y video (Veo). Única credencial: `GEMINI_API_KEY` (free tier de Google AI Studio, sin consumo de créditos).
+- **IA gratuita** (sin consumo de créditos):
+  - **Razonamiento**: cascada **Groq** (`llama-3.3-70b-versatile`, clave `GROQ_API_KEY`) → **OpenRouter** modelo `:free` (clave `OPENROUTER_API_KEY`). Con una alcanza; con ambas hay fallback automático.
+  - **Imágenes** (storyboard): **Pollinations.ai** — sin API key.
+  - **Video**: opcional vía Google Veo con `GEMINI_API_KEY` (sin clave o sin cuota, la corrida queda con dossier + storyboard + prompt maestro; nunca falla).
 
 ## Convenciones
 
@@ -19,4 +22,4 @@
 
 ## Arquitectura en una línea
 
-`src/routes/*.tsx` (UI) → `src/lib/runs.functions.ts` (server functions) → `src/lib/pipeline.server.ts` (orquestador) → `src/lib/ai.server.ts` + `src/lib/video.server.ts` (Gemini) y `src/lib/trends.server.ts` (sensado) → persistencia en Supabase (`src/integrations/supabase/client.server.ts`).
+`src/routes/*.tsx` (UI) → `src/lib/runs.functions.ts` (server functions) → `src/lib/pipeline.server.ts` (orquestador) → `src/lib/ai.server.ts` (razonamiento Groq→OpenRouter + imágenes Pollinations) + `src/lib/video.server.ts` (video opcional) y `src/lib/trends.server.ts` (sensado) → persistencia en Supabase (`src/integrations/supabase/client.server.ts`).
