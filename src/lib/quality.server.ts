@@ -1,5 +1,6 @@
 // Control de calidad automático del short antes de aprobarlo y renderizarlo. Solo servidor.
 import { reason } from "./ai.server";
+import { DEFAULT_QUALITY_GATE, resolveQualityGate, type QualityGate } from "./quality-config";
 
 export interface QualityCheck {
   puntajes: {
@@ -20,6 +21,7 @@ export interface QualityCheck {
   mecanica?: MechanicalCheck;
   aprobado?: boolean;
   bloqueos?: string[];
+  gate?: QualityGate;
 }
 
 const obj = (properties: Record<string, unknown>) => ({
@@ -83,7 +85,10 @@ function normalizar(value: string): string {
 }
 
 /** Chequeos duros y deterministas sobre la estructura del dossier. */
-export function mechanicalCheck(dossier: Record<string, unknown>): MechanicalCheck {
+export function mechanicalCheck(
+  dossier: Record<string, unknown>,
+  gate: QualityGate = DEFAULT_QUALITY_GATE,
+): MechanicalCheck {
   const guion = Array.isArray(dossier["guion"]) ? (dossier["guion"] as Record<string, unknown>[]) : [];
   const planos = Array.isArray(dossier["planos"]) ? (dossier["planos"] as Record<string, unknown>[]) : [];
   const hook = (dossier["hook"] ?? {}) as Record<string, unknown>;
@@ -115,7 +120,9 @@ export function mechanicalCheck(dossier: Record<string, unknown>): MechanicalChe
   if (planos.length < 10) problemas.push(`Solo ${planos.length} planos: el ritmo va a ser lento.`);
 
   const corte = planos.length > 0 && duracion > 0 ? Number((duracion / planos.length).toFixed(2)) : 0;
-  if (corte > 3.5) problemas.push(`Corte promedio de ${corte}s: demasiado largo para shorts.`);
+  if (corte > gate.maxAvgCut) {
+    problemas.push(`Corte promedio de ${corte}s: supera el máximo de ${gate.maxAvgCut}s.`);
+  }
 
   // Frases repetidas: 4-gramas duplicados en toda la locución.
   const locucion = normalizar([String(hook["voz_en_off"] ?? ""), ...beats.map((b) => b.voz)].join(" "));
@@ -129,7 +136,9 @@ export function mechanicalCheck(dossier: Record<string, unknown>): MechanicalChe
     .filter(([, count]) => count > 1)
     .map(([gram]) => gram)
     .slice(0, 8);
-  if (repetidas.length > 0) problemas.push(`Repeticiones literales: ${repetidas.join(" | ")}`);
+  if (repetidas.length > gate.maxRepeats) {
+    problemas.push(`Repeticiones literales (${repetidas.length} > ${gate.maxRepeats}): ${repetidas.join(" | ")}`);
+  }
 
   const prohibidas = PROHIBIDAS.filter((frase) => locucion.includes(normalizar(frase)));
   if (prohibidas.length > 0) problemas.push(`Muletillas prohibidas: ${prohibidas.join(" | ")}`);
@@ -170,8 +179,10 @@ Escribís en español rioplatense, directo y sin diplomacia.`;
 export async function evaluateQuality(
   dossier: Record<string, unknown>,
   tema: string,
+  gateOverride?: Partial<QualityGate>,
 ): Promise<QualityCheck> {
-  const mecanica = mechanicalCheck(dossier);
+  const gate = resolveQualityGate(gateOverride);
+  const mecanica = mechanicalCheck(dossier, gate);
 
   const critica = await reason<QualityCheck>({
     system: AUDITOR,
@@ -205,13 +216,38 @@ ${JSON.stringify(dossier).slice(0, 40_000)}`,
   const valores = Object.values(puntajes).filter((value) => typeof value === "number");
   const minimo = valores.length > 0 ? Math.min(...valores) : 0;
 
+  // Reglas de aprobación/bloqueo contra el gate configurable.
   const bloqueos: string[] = [];
   if (mecanica.problemas.length > 0) bloqueos.push(...mecanica.problemas);
-  if ((critica.puntaje_total ?? 0) < 80) {
-    bloqueos.push(`Puntaje total ${Math.round(critica.puntaje_total ?? 0)}: por debajo del mínimo de 80.`);
+  if ((critica.puntaje_total ?? 0) < gate.minTotal) {
+    bloqueos.push(
+      `Puntaje total ${Math.round(critica.puntaje_total ?? 0)}: por debajo del mínimo de ${gate.minTotal}.`,
+    );
   }
-  if (minimo < 70) bloqueos.push(`Hay un punto del checklist en ${Math.round(minimo)} (mínimo 70).`);
-  if ((puntajes.gancho ?? 0) < 80) bloqueos.push("El gancho no llega a 80: sin gancho no se publica.");
+  if (minimo < gate.minAnyItem) {
+    bloqueos.push(`Hay un punto del checklist en ${Math.round(minimo)} (mínimo ${gate.minAnyItem}).`);
+  }
+  if ((puntajes.gancho ?? 0) < gate.minHook) {
+    bloqueos.push(`Gancho en ${Math.round(puntajes.gancho ?? 0)}: mínimo ${gate.minHook}. Sin gancho no se publica.`);
+  }
+  if ((puntajes.impacto_emocional ?? 0) < gate.minImpact) {
+    bloqueos.push(
+      `Impacto emocional en ${Math.round(puntajes.impacto_emocional ?? 0)}: mínimo ${gate.minImpact}.`,
+    );
+  }
+  if ((puntajes.cta ?? 0) < gate.minCta) {
+    bloqueos.push(`CTA en ${Math.round(puntajes.cta ?? 0)}: mínimo ${gate.minCta}.`);
+  }
+  if ((critica.prediccion_retencion_3s ?? 0) < gate.minRetention3s) {
+    bloqueos.push(
+      `Retención estimada a los 3s ${Math.round(critica.prediccion_retencion_3s ?? 0)}%: mínimo ${gate.minRetention3s}%.`,
+    );
+  }
+  if ((critica.frases_repetidas ?? []).length > gate.maxRepeats) {
+    bloqueos.push(
+      `El auditor detectó ${(critica.frases_repetidas ?? []).length} frases repetidas (máximo ${gate.maxRepeats}).`,
+    );
+  }
 
-  return { ...critica, mecanica, bloqueos, aprobado: bloqueos.length === 0 };
+  return { ...critica, mecanica, bloqueos, gate, aprobado: bloqueos.length === 0 };
 }

@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useEffect } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, Copy, Film, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Copy, ExternalLink, Film, RefreshCw } from "lucide-react";
+import { classifyProviderError } from "@/lib/ai-errors";
+import { QUALITY_GATE_LABELS, type QualityGate } from "@/lib/quality-config";
 import { advanceVideo, getRun } from "@/lib/runs.functions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -123,9 +125,11 @@ function RunDetail() {
       </header>
 
       {text(run["error"]) ? (
-        <p className="panel mt-6 border-destructive/50 p-5 text-sm text-destructive">
-          {text(run["error"])}
-        </p>
+        <ProviderAlert
+          raw={text(run["error"])}
+          reintentando={videoMutation.isPending}
+          onRetry={() => videoMutation.mutate(true)}
+        />
       ) : null}
 
       <Tabs defaultValue="video" className="mt-8">
@@ -258,6 +262,10 @@ function RunDetail() {
               value={list(calidad["frases_repetidas"]).map(String).join(" | ")}
             />
             <Field label="Bloqueos" value={list(calidad["bloqueos"]).map(String).join("\n")} />
+            <Field
+              label="Umbrales de aprobación aplicados"
+              value={gateResumen(calidad["gate"])}
+            />
             <Field
               label="Intentos de escritura"
               value={String(dossier["intentos_de_calidad"] ?? "")}
@@ -491,6 +499,62 @@ function Field({ label, value, copyable }: { label: string; value: string; copya
         ) : null}
       </div>
       <p className="mt-1 whitespace-pre-wrap text-sm">{value}</p>
+    </div>
+  );
+}
+
+/** Resumen legible del gate configurable usado en la corrida. */
+function gateResumen(raw: unknown): string {
+  const gate = dict(raw) as Partial<QualityGate>;
+  const entries = Object.entries(gate).filter(([, value]) => typeof value === "number");
+  if (entries.length === 0) return "";
+  return entries
+    .map(([key, value]) => `${QUALITY_GATE_LABELS[key as keyof QualityGate] ?? key}: ${value}`)
+    .join("\n");
+}
+
+/** Alerta accionable para errores del proveedor (créditos agotados, cuota, clave). */
+function ProviderAlert({
+  raw,
+  onRetry,
+  reintentando,
+}: {
+  raw: string;
+  onRetry: () => void;
+  reintentando: boolean;
+}) {
+  const info = classifyProviderError(raw);
+  return (
+    <div className="panel mt-6 border-destructive/50 p-5">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
+        <div className="space-y-2">
+          <p className="font-semibold text-destructive">{info.titulo}</p>
+          <p className="text-sm text-muted-foreground">{info.detalle}</p>
+          <p className="text-xs text-muted-foreground/70">{raw}</p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {info.acciones.map((accion) =>
+              accion.href ? (
+                <Button key={accion.label} size="sm" variant="secondary" asChild>
+                  <a href={accion.href} target="_blank" rel="noreferrer">
+                    <ExternalLink className="size-3.5" /> {accion.label}
+                  </a>
+                </Button>
+              ) : (
+                <Button
+                  key={accion.label}
+                  size="sm"
+                  disabled={reintentando}
+                  onClick={onRetry}
+                >
+                  <RefreshCw className={`size-3.5 ${reintentando ? "animate-spin" : ""}`} />
+                  {accion.label}
+                </Button>
+              ),
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

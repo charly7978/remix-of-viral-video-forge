@@ -3,7 +3,9 @@ import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { generateFrame, reason } from "./ai.server";
 import { evaluateQuality, type QualityCheck } from "./quality.server";
 import { startVideoJob } from "./video.server";
-import { asBriefing, sense, type TrendItem } from "./trends.server";
+import { asBriefing, sense, TRACTION_THRESHOLDS, type TrendItem } from "./trends.server";
+import { pickTemplate, templateBriefing, type ScriptTemplate } from "./script-templates";
+import type { QualityGate } from "./quality-config";
 
 export type Slot = "viral" | "general";
 
@@ -168,6 +170,11 @@ Método obligatorio de selección (hacelo internamente y devolvé solo el result
    que ya esté saturado sin ángulo nuevo, o que arriesgue desmonetización.
 4. Quedate con el ganador y devolvé los otros cinco como descartados, con motivo y puntaje.
 
+Reglas de tracción no negociables: no elijas un tema que el ranking compuesto marque como
+DESCARTAR. Si ningún tema es APTO, cambiá a un ángulo de interés general de alto impacto antes que
+producir sobre un tema frío (mínimos: ${TRACTION_THRESHOLDS.minFuentes} fuentes, ${TRACTION_THRESHOLDS.minSenales} señales,
+puntaje ${TRACTION_THRESHOLDS.minScore}).
+
 Material sensado en vivo:
 ${briefing}
 
@@ -180,7 +187,12 @@ Además del tema ganador, devolvé:
   });
 }
 
-async function escribirDossier(slot: Slot, seleccion: Seleccion): Promise<Record<string, unknown>> {
+async function escribirDossier(
+  slot: Slot,
+  seleccion: Seleccion,
+  template: ScriptTemplate,
+  semilla: number,
+): Promise<Record<string, unknown>> {
   return reason<Record<string, unknown>>({
     system: ESTRATEGA,
     schemaName: "dossier",
@@ -202,6 +214,8 @@ Riesgos a esquivar: ${seleccion.riesgos.join(" | ")}
 
 ${REGLAS_DE_IMPACTO}
 
+${templateBriefing(template, semilla)}
+
 Requisitos estructurales:
 - El guion va segundo a segundo, sin huecos ni superposiciones: cada tramo arranca exactamente donde
   termina el anterior, desde 0 hasta la duración final (entre 40 y 55 segundos).
@@ -218,6 +232,8 @@ Requisitos estructurales:
 async function corregirDossier(
   dossier: Record<string, unknown>,
   calidad: QualityCheck,
+  template: ScriptTemplate,
+  semilla: number,
 ): Promise<Record<string, unknown>> {
   const fallas = [
     ...(calidad.bloqueos ?? []),
@@ -236,6 +252,8 @@ Fallas a corregir:
 ${fallas.map((falla) => `- ${falla}`).join("\n")}
 
 ${REGLAS_DE_IMPACTO}
+
+${templateBriefing(template, semilla)}
 
 Corregí especialmente el gancho (tiene que ser más brutal y más concreto), la curva de tensión, las
 repeticiones y el cierre. Mantené el guion continuo sin huecos y entre 40 y 55 segundos.
@@ -273,7 +291,11 @@ async function renderStoryboard(
   return frames;
 }
 
-export async function runProduction(slot: Slot, triggeredBy: string): Promise<string> {
+export async function runProduction(
+  slot: Slot,
+  triggeredBy: string,
+  gateOverride?: Partial<QualityGate>,
+): Promise<string> {
   const started = Date.now();
   const { data: created, error: createError } = await supabaseAdmin
     .from("runs")
@@ -305,15 +327,18 @@ export async function runProduction(slot: Slot, triggeredBy: string): Promise<st
       })
       .eq("id", runId);
 
-    let dossier = await escribirDossier(slot, seleccion);
-    let calidad = await evaluateQuality(dossier, seleccion.tema);
+    const template = pickTemplate(await plantillasRecientes());
+    const semilla = Math.floor(Math.random() * 1000);
+
+    let dossier = await escribirDossier(slot, seleccion, template, semilla);
+    let calidad = await evaluateQuality(dossier, seleccion.tema, gateOverride);
     let intentos = 1;
 
-    // Una pasada de corrección si el checklist bloquea la aprobación.
-    if (!calidad.aprobado) {
-      dossier = await corregirDossier(dossier, calidad);
-      calidad = await evaluateQuality(dossier, seleccion.tema);
-      intentos = 2;
+    // Hasta dos pasadas de corrección si el checklist bloquea la aprobación.
+    while (!calidad.aprobado && intentos < 3) {
+      dossier = await corregirDossier(dossier, calidad, template, semilla);
+      calidad = await evaluateQuality(dossier, seleccion.tema, gateOverride);
+      intentos += 1;
     }
 
     await supabaseAdmin.from("runs").update({ status: "rendering" }).eq("id", runId);
@@ -344,6 +369,7 @@ export async function runProduction(slot: Slot, triggeredBy: string): Promise<st
         dossier: {
           ...dossier,
           seleccion: { ...seleccion },
+          plantilla: { id: template.id, nombre: template.nombre, semilla },
           avisos: warnings,
           intentos_de_calidad: intentos,
         } as never,
@@ -383,6 +409,22 @@ export function videoPrompt(masterPrompt: string, dossier: Record<string, unknow
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+/** Ids de plantilla usados en las últimas corridas, para no repetir estructura. */
+async function plantillasRecientes(): Promise<string[]> {
+  const { data } = await supabaseAdmin
+    .from("runs")
+    .select("dossier")
+    .order("created_at", { ascending: false })
+    .limit(4);
+  return (data ?? [])
+    .map((row) => {
+      const dossier = (row.dossier ?? {}) as Record<string, unknown>;
+      const plantilla = (dossier["plantilla"] ?? {}) as Record<string, unknown>;
+      return typeof plantilla["id"] === "string" ? plantilla["id"] : null;
+    })
+    .filter((id): id is string => Boolean(id));
 }
 
 async function guardarCandidatos(runId: string, items: TrendItem[]): Promise<void> {
