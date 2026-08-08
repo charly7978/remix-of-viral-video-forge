@@ -1,34 +1,34 @@
 - generic [active] [ref=e1]:
-  - main [ref=e2]:
-    - generic [ref=e4]:
-      - paragraph [ref=e5]: Argentina · 2 producciones por día
-      - heading "Radar viral AR" [level=1] [ref=e6]
-      - paragraph [ref=e7]: "Los agentes sensan YouTube, Google Trends y los titulares del día, eligen el tema con más tracción real y devuelven el dossier técnico completo del short: gancho, guion segundo a segundo, plano por plano y prompt maestro listo para el generador de video."
-    - generic [ref=e8]:
-      - generic [ref=e9]:
-        - paragraph [ref=e13]: Corridas
-        - paragraph [ref=e14]: "0"
-      - generic [ref=e15]:
-        - paragraph [ref=e20]: Puntaje viral medio
-        - paragraph [ref=e21]: —
-      - generic [ref=e22]:
-        - paragraph [ref=e26]: Último tema caliente
-        - paragraph [ref=e27]: Sin datos
-      - generic [ref=e28]:
-        - paragraph [ref=e33]: Duración última corrida
-        - paragraph [ref=e34]: —
-    - generic [ref=e35]:
-      - generic [ref=e36]:
-        - heading "Tema del momento" [level=3] [ref=e41]
-        - paragraph [ref=e42]: El contenido con más visualizaciones y más velocidad de crecimiento en todo el país, ahora mismo.
-        - button "Producir ahora" [ref=e43] [cursor=pointer]
-      - generic [ref=e44]:
-        - heading "Interés general" [level=3] [ref=e50]
-        - paragraph [ref=e51]: Efemérides, mitos, horóscopo y misterios tratados con la misma tensión que una noticia de último momento.
-        - button "Producir ahora" [ref=e52] [cursor=pointer]
-    - generic [ref=e53]:
-      - generic [ref=e54]:
-        - heading "Historial de producción" [level=2] [ref=e55]
-        - paragraph [ref=e56]: 0 registros
-      - paragraph [ref=e58]: Cargando…
-  - region "Notifications alt+T"
+    - main [ref=e2]:
+        - generic [ref=e4]:
+            - paragraph [ref=e5]: Argentina · 2 producciones por día
+            - heading "Radar viral AR" [level=1] [ref=e6]
+            - paragraph [ref=e7]: "Los agentes sensan YouTube, Google Trends y los titulares del día, eligen el tema con más tracción real y devuelven el dossier técnico completo del short: gancho, guion segundo a segundo, plano por plano y prompt maestro listo para el generador de video."
+        - generic [ref=e8]:
+            - generic [ref=e9]:
+                - paragraph [ref=e13]: Corridas
+                - paragraph [ref=e14]: "0"
+            - generic [ref=e15]:
+                - paragraph [ref=e20]: Puntaje viral medio
+                - paragraph [ref=e21]: —
+            - generic [ref=e22]:
+                - paragraph [ref=e26]: Último tema caliente
+                - paragraph [ref=e27]: Sin datos
+            - generic [ref=e28]:
+                - paragraph [ref=e33]: Duración última corrida
+                - paragraph [ref=e34]: —
+        - generic [ref=e35]:
+            - generic [ref=e36]:
+                - heading "Tema del momento" [level=3] [ref=e41]
+                - paragraph [ref=e42]: El contenido con más visualizaciones y más velocidad de crecimiento en todo el país, ahora mismo.
+                - button "Producir ahora" [ref=e43] [cursor=pointer]
+            - generic [ref=e44]:
+                - heading "Interés general" [level=3] [ref=e50]
+                - paragraph [ref=e51]: Efemérides, mitos, horóscopo y misterios tratados con la misma tensión que una noticia de último momento.
+                - button "Producir ahora" [ref=e52] [cursor=pointer]
+        - generic [ref=e53]:
+            - generic [ref=e54]:
+                - heading "Historial de producción" [level=2] [ref=e55]
+                - paragraph [ref=e56]: 0 registros
+            - paragraph [ref=e58]: Cargando…
+    - region "Notifications alt+T"

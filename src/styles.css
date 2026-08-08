@@ -96,12 +96,9 @@
   --sidebar-ring: oklch(0.76 0.184 58);
 
   --gradient-signal: linear-gradient(135deg, oklch(0.76 0.184 58), oklch(0.68 0.2 30));
-  --gradient-panel: linear-gradient(
-    160deg,
-    oklch(0.22 0.016 62) 0%,
-    oklch(0.18 0.014 62) 100%
-  );
-  --glow-signal: 0 0 0 1px oklch(0.76 0.184 58 / 0.35), 0 12px 40px -12px oklch(0.76 0.184 58 / 0.5);
+  --gradient-panel: linear-gradient(160deg, oklch(0.22 0.016 62) 0%, oklch(0.18 0.014 62) 100%);
+  --glow-signal:
+    0 0 0 1px oklch(0.76 0.184 58 / 0.35), 0 12px 40px -12px oklch(0.76 0.184 58 / 0.5);
   --grid-line: oklch(1 0 0 / 0.035);
 }
 

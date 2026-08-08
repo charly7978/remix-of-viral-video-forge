@@ -89,8 +89,12 @@ export function mechanicalCheck(
   dossier: Record<string, unknown>,
   gate: QualityGate = DEFAULT_QUALITY_GATE,
 ): MechanicalCheck {
-  const guion = Array.isArray(dossier["guion"]) ? (dossier["guion"] as Record<string, unknown>[]) : [];
-  const planos = Array.isArray(dossier["planos"]) ? (dossier["planos"] as Record<string, unknown>[]) : [];
+  const guion = Array.isArray(dossier["guion"])
+    ? (dossier["guion"] as Record<string, unknown>[])
+    : [];
+  const planos = Array.isArray(dossier["planos"])
+    ? (dossier["planos"] as Record<string, unknown>[])
+    : [];
   const hook = (dossier["hook"] ?? {}) as Record<string, unknown>;
   const retencion = (dossier["arquitectura_de_retencion"] ?? {}) as Record<string, unknown>;
   const monetizacion = (dossier["monetizacion"] ?? {}) as Record<string, unknown>;
@@ -119,13 +123,16 @@ export function mechanicalCheck(
   if (huecos > 0) problemas.push(`El guion tiene ${huecos} hueco(s) temporal(es).`);
   if (planos.length < 10) problemas.push(`Solo ${planos.length} planos: el ritmo va a ser lento.`);
 
-  const corte = planos.length > 0 && duracion > 0 ? Number((duracion / planos.length).toFixed(2)) : 0;
+  const corte =
+    planos.length > 0 && duracion > 0 ? Number((duracion / planos.length).toFixed(2)) : 0;
   if (corte > gate.maxAvgCut) {
     problemas.push(`Corte promedio de ${corte}s: supera el máximo de ${gate.maxAvgCut}s.`);
   }
 
   // Frases repetidas: 4-gramas duplicados en toda la locución.
-  const locucion = normalizar([String(hook["voz_en_off"] ?? ""), ...beats.map((b) => b.voz)].join(" "));
+  const locucion = normalizar(
+    [String(hook["voz_en_off"] ?? ""), ...beats.map((b) => b.voz)].join(" "),
+  );
   const palabras = locucion.split(" ").filter(Boolean);
   const vistos = new Map<string, number>();
   for (let i = 0; i + 4 <= palabras.length; i += 1) {
@@ -137,15 +144,21 @@ export function mechanicalCheck(
     .map(([gram]) => gram)
     .slice(0, 8);
   if (repetidas.length > gate.maxRepeats) {
-    problemas.push(`Repeticiones literales (${repetidas.length} > ${gate.maxRepeats}): ${repetidas.join(" | ")}`);
+    problemas.push(
+      `Repeticiones literales (${repetidas.length} > ${gate.maxRepeats}): ${repetidas.join(" | ")}`,
+    );
   }
 
   const prohibidas = PROHIBIDAS.filter((frase) => locucion.includes(normalizar(frase)));
   if (prohibidas.length > 0) problemas.push(`Muletillas prohibidas: ${prohibidas.join(" | ")}`);
 
-  const hookPalabras = String(hook["voz_en_off"] ?? "").trim().split(/\s+/).filter(Boolean).length;
+  const hookPalabras = String(hook["voz_en_off"] ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
   if (hookPalabras === 0) problemas.push("El gancho no tiene locución.");
-  if (hookPalabras > 22) problemas.push(`Gancho de ${hookPalabras} palabras: no entra en 3 segundos.`);
+  if (hookPalabras > 22)
+    problemas.push(`Gancho de ${hookPalabras} palabras: no entra en 3 segundos.`);
 
   const ctaTexto = [
     String(retencion["disparador_de_comentarios"] ?? ""),
@@ -155,7 +168,8 @@ export function mechanicalCheck(
     .join(" ")
     .trim();
   const tieneCta = ctaTexto.length > 15;
-  if (!tieneCta) problemas.push("Falta un llamado a la acción o disparador de comentarios concreto.");
+  if (!tieneCta)
+    problemas.push("Falta un llamado a la acción o disparador de comentarios concreto.");
 
   return {
     duracion_total_seg: duracion,
@@ -225,10 +239,14 @@ ${JSON.stringify(dossier).slice(0, 40_000)}`,
     );
   }
   if (minimo < gate.minAnyItem) {
-    bloqueos.push(`Hay un punto del checklist en ${Math.round(minimo)} (mínimo ${gate.minAnyItem}).`);
+    bloqueos.push(
+      `Hay un punto del checklist en ${Math.round(minimo)} (mínimo ${gate.minAnyItem}).`,
+    );
   }
   if ((puntajes.gancho ?? 0) < gate.minHook) {
-    bloqueos.push(`Gancho en ${Math.round(puntajes.gancho ?? 0)}: mínimo ${gate.minHook}. Sin gancho no se publica.`);
+    bloqueos.push(
+      `Gancho en ${Math.round(puntajes.gancho ?? 0)}: mínimo ${gate.minHook}. Sin gancho no se publica.`,
+    );
   }
   if ((puntajes.impacto_emocional ?? 0) < gate.minImpact) {
     bloqueos.push(

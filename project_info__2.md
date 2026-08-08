@@ -22,6 +22,7 @@ Este documento documenta el estado actual como base para esos cambios. Las secci
 ## Arquitectura
 
 ### Patrón general
+
 - **Full-stack SSR con TanStack Start** (file-based routing). El servidor corre con **Nitro** (via Vite plugin de Lovable) y el cliente es React 19 con React Query.
 - **Arquitectura en capas**:
   - **Rutas clientes** (`src/routes/*.tsx`) — UI del dashboard.
@@ -32,18 +33,20 @@ Este documento documenta el estado actual como base para esos cambios. Las secci
 - **IA**: Toda la IA pasa por el gateway de Lovable (`https://ai.gateway.lovable.dev/v1`) usando la API key `LOVABLE_API_KEY`. No hay llamadas directas a ningún proveedor.
 
 ### Stack tecnológico
-| Capa | Tecnología |
-|------|-----------|
-| Runtime | Node.js + Bun (bun.lock, bunfig.toml) |
-| Framework | TanStack Start 1.168, TanStack Router 1.170, TanStack Query 5.101 |
-| UI | React 19, shadcn/ui (Radix), Tailwind CSS 4, lucide-react, sonner, recharts |
-| Backend SSR | Nitro 3.0 beta (build target Cloudflare) |
-| DB/BaaS | Supabase (supabase-js 2.112) |
-| IA | Gateway Lovable (`openai/gpt-5.6-sol`, `google/gemini-3.1-flash-image`) |
-| Validación | zod 3.24 |
-| Build | Vite 8 + plugin `@lovable.dev/vite-tanstack-config` |
+
+| Capa        | Tecnología                                                                  |
+| ----------- | --------------------------------------------------------------------------- |
+| Runtime     | Node.js + Bun (bun.lock, bunfig.toml)                                       |
+| Framework   | TanStack Start 1.168, TanStack Router 1.170, TanStack Query 5.101           |
+| UI          | React 19, shadcn/ui (Radix), Tailwind CSS 4, lucide-react, sonner, recharts |
+| Backend SSR | Nitro 3.0 beta (build target Cloudflare)                                    |
+| DB/BaaS     | Supabase (supabase-js 2.112)                                                |
+| IA          | Gateway Lovable (`openai/gpt-5.6-sol`, `google/gemini-3.1-flash-image`)     |
+| Validación  | zod 3.24                                                                    |
+| Build       | Vite 8 + plugin `@lovable.dev/vite-tanstack-config`                         |
 
 ### Entrada y arranque
+
 1. `vite.config.ts` usa `defineConfig` de `@lovable.dev/vite-tanstack-config` (configura TanStack Start, React, Tailwind, alias `@`, nitro).
 2. El server entry apunta a `src/server.ts` → wrapper de errores SSR catastróficos → importa `@tanstack/react-start/server-entry`.
 3. `src/start.ts` crea la instancia de TanStack Start con:
@@ -52,6 +55,7 @@ Este documento documenta el estado actual como base para esos cambios. Las secci
 4. El router se crea en `src/router.tsx` con `routeTree.gen.ts` (generado automáticamente).
 
 ### Flujo de ejecución principal (producción de un video)
+
 ```
 Dashboard (botón "Producir ahora")
   → useServerFn(startRun)              [src/lib/runs.functions.ts]
@@ -72,6 +76,7 @@ Dashboard (botón "Producir ahora")
 ```
 
 ### Disparo programado (2 veces/día)
+
 No hay cron interno. Existe un endpoint público **`POST /api/public/hooks/produce`** (`src/routes/api/public/hooks/produce.ts`) diseñado para ser llamado por **n8n**, pg_cron o cualquier scheduler. Se autentica con el header `x-scheduler-secret` o `apikey` comparado contra `SCHEDULER_HOOK_SECRET`. Body opcional: `{ "slot": "viral" | "general" }` (default: `viral`). Llama `runProduction(slot, "programado")`.
 
 ---
@@ -135,6 +140,7 @@ remix-of-viral-video-forge/
 ## Abstracciones clave
 
 ### `src/lib/ai.server.ts` — Capa de IA (⭐ el punto #2 del pedido)
+
 - **Responsabilidad**: Único punto de contacto con la IA. Envuelve el gateway de Lovable.
 - **`reason<T>({system, prompt, schemaName, schema, effort, model})`**: llamada de razonamiento con **salida estructurada JSON** usando el endpoint `/responses` del gateway con `stream: true` y `text.format.type: "json_schema"`. El schema se valida del lado del gateway (`strict: true`). El streaming es **obligatorio** porque una corrida puede superar los 2 minutos y una respuesta bufferizada se cortaría (comentario en el código). Modelo default: `openai/gpt-5.6-sol`, effort default `medium`.
 - **`generateFrame(prompt)`**: genera imagen vía `/chat/completions` con `google/gemini-3.1-flash-image` y `modalities: ["image","text"]`. Devuelve `Uint8Array` (decodifica base64 de data URL).
@@ -143,6 +149,7 @@ remix-of-viral-video-forge/
 - **Uso**: `runProduction` en `pipeline.server.ts` (selección de tema, dossier, QA) y `renderStoryboard`/`renderVideo`.
 
 ### `src/lib/pipeline.server.ts` — Orquestador (⭐ el corazón del sistema)
+
 - **Responsabilidad**: Ejecuta la corrida completa de producción de un short.
 - **`runProduction(slot, triggeredBy)`**: crea el registro `runs`, itera por los estados `sensing → analyzing → writing → rendering → done` (o `error`), persistendo cada avance. Actualiza las tablas `runs` y `trend_candidates`. Renderiza storyboard (3 frames) y video final, subiéndolos a Storage.
 - **Schemas JSON**: `seleccionSchema` (tema, ángulo, emoción, puntaje 0-100, vistas estimadas, ventana de oportunidad, descartados con motivo) y `dossierSchema` (gancho, guion segundo a segundo, arquitectura de retención, prompt maestro, 12-18 planos, audio, publicación, monetización, control de calidad). Ambos se pasan al gateway para salida estructurada estricta.
@@ -151,6 +158,7 @@ remix-of-viral-video-forge/
 - **Uso**: server function `startRun` y webhook `produce.ts`.
 
 ### `src/lib/trends.server.ts` — Sensado de tendencias
+
 - **Responsabilidad**: Recopila tendencias reales de Argentina desde 3 fuentes en paralelo con `Promise.all`.
 - **`fetchYouTubeTrending()`**: YouTube Data API v3 (`chart=mostPopular`, `regionCode=AR`, 50 videos). Calcula `velocity = views / horasDesdePublicación`. Requiere `YOUTUBE_API_KEY` (si falta, devuelve `[]` y agrega warning).
 - **`fetchGoogleTrends()`**: RSS público `https://trends.google.com/trending/rss?geo=AR` (20 items, parsea `ht:approx_traffic`).
@@ -160,6 +168,7 @@ remix-of-viral-video-forge/
 - **Tolerancia a fallos**: cada fuente se captura individualmente; YouTube falla → warning, las otras siguen.
 
 ### `src/lib/runs.functions.ts` — Server Functions (API RPC)
+
 - **Responsabilidad**: Puente seguro entre el dashboard y la lógica server.
 - **`listRuns`** (GET): listado de últimas 60 corridas. Middleware: `requireSupabaseAuth`.
 - **`getRun`** (POST): detalle completo de una corrida + candidatos + URLs firmadas de storage (frames y video, expiran a 1 hora). Middleware: `requireSupabaseAuth`.
@@ -168,17 +177,21 @@ remix-of-viral-video-forge/
 - **Importante para el punto #1**: si se elimina el login, estos middlewares hay que sacarlos o reemplazarlos por un open-access middleware.
 
 ### `src/integrations/supabase/auth-middleware.ts` — Middleware de autenticación (⭐ a eliminar/ajustar para el punto #1)
+
 - `requireSupabaseAuth`: valida el header `Authorization: Bearer <token>` (formato JWT de 3 partes), verifica claims con `supabase.auth.getClaims(token)` y expone `context.supabase` (cliente autenticado) + `context.userId` + `context.claims` a los handlers.
 - Extensiones Lovable: soporta las **nuevas API keys** (`sb_publishable_*`, `sb_secret_*`) — quita el header Authorization si coincide con la key en el fetch wrapper.
 - **Archivos generados** que dicen "This file is automatically generated. Do not edit it directly": `client.ts`, `client.server.ts`, `auth-attacher.ts`, `auth-middleware.ts`, `types.ts`. Editar con cuidado (Lovable los regeneraría).
 
 ### `src/hooks/use-session.ts` — Sesión cliente
+
 - Escucha `supabase.auth.onAuthStateChange` + `getSession()`. Expone `{ session, loading }`. Todas las rutas del dashboard lo usan para redirigir a `/auth` si no hay sesión.
 
 ### `src/routes/index.tsx` — Dashboard
+
 - Métricas (corridas, puntaje viral medio, último tema caliente, duración), dos LaunchCards ("Tema del momento" / "Interés general") que llaman `startRun`, historial con polling cada 15s (`refetchInterval: 15_000`), y botón **"Salir"** (`supabase.auth.signOut()`).
 
 ### `src/routes/api/public/hooks/produce.ts` — Webhook programado
+
 - Endpoint público que no usa auth de Supabase; usa `x-scheduler-secret`/`apikey` contra `SCHEDULER_HOOK_SECRET`. Ideal para n8n (como pidió el usuario en el README original).
 
 ---
@@ -186,6 +199,7 @@ remix-of-viral-video-forge/
 ## Data Flow detallado
 
 ### 1. Producción manual desde el dashboard
+
 1. Usuario entra a `/` → `useSession()` → si no hay sesión, `navigate("/auth")`.
 2. Usuario hace login en `/auth` → `supabase.auth.signInWithPassword()` → sesión persistida en localStorage.
 3. Botón "Producir ahora" → `useMutation` → `useServerFn(startRun)` → `attachSupabaseAuth` adjunta Bearer token → `requireSupabaseAuth` valida JWT → handler ejecuta `runProduction(slot, "manual")`.
@@ -193,12 +207,14 @@ remix-of-viral-video-forge/
 5. Usuario clickea una corrida → `/corrida/$runId` → `getRun` → renderiza dossier en 5 tabs (Guion, Prompt maestro, Planos, Publicación, Inteligencia) con URLs firmadas de frames/video.
 
 ### 2. Producción programada (2 veces/día)
+
 1. **n8n** (o scheduler) hace `POST /api/public/hooks/produce` con header `x-scheduler-secret`.
 2. El handler valida el secreto, parsea `{slot}`, importa `runProduction`.
 3. El flujo es idéntico al manual, con `triggered_by: "programado"` (visible como badge en el dashboard).
 4. **No existe** implementación nativa de cron en el repo — depende 100% del scheduler externo.
 
 ### 3. Flujo interno de datos del pipeline
+
 ```
 sense() → TrendItem[] → asBriefing() → string
   → reason("seleccion") → Seleccion (JSON schema estricto)
@@ -231,28 +247,31 @@ sense() → TrendItem[] → asBriefing() → string
 ## Modelo de datos (inferido del código)
 
 ### Tabla `runs`
-| Columna | Tipo (inferido) |
-|---------|-----------------|
-| id | uuid PK |
-| slot | 'viral' \| 'general' |
-| status | 'pending' \| 'sensing' \| 'analyzing' \| 'writing' \| 'rendering' \| 'done' \| 'error' |
-| topic | text nullable |
-| topic_angle | text nullable |
-| viral_score | numeric nullable |
-| emotion | text nullable |
-| master_prompt | text nullable |
-| error | text nullable |
-| triggered_by | text ('manual' \| 'programado') |
-| duration_ms | numeric nullable |
-| dossier | jsonb nullable |
-| storyboard | jsonb nullable (array de {numero, path}) |
-| video_url | text nullable (path en Storage) |
-| created_at | timestamptz |
+
+| Columna       | Tipo (inferido)                                                                        |
+| ------------- | -------------------------------------------------------------------------------------- |
+| id            | uuid PK                                                                                |
+| slot          | 'viral' \| 'general'                                                                   |
+| status        | 'pending' \| 'sensing' \| 'analyzing' \| 'writing' \| 'rendering' \| 'done' \| 'error' |
+| topic         | text nullable                                                                          |
+| topic_angle   | text nullable                                                                          |
+| viral_score   | numeric nullable                                                                       |
+| emotion       | text nullable                                                                          |
+| master_prompt | text nullable                                                                          |
+| error         | text nullable                                                                          |
+| triggered_by  | text ('manual' \| 'programado')                                                        |
+| duration_ms   | numeric nullable                                                                       |
+| dossier       | jsonb nullable                                                                         |
+| storyboard    | jsonb nullable (array de {numero, path})                                               |
+| video_url     | text nullable (path en Storage)                                                        |
+| created_at    | timestamptz                                                                            |
 
 ### Tabla `trend_candidates`
+
 `id`, `run_id` (FK → runs), `title`, `channel`, `views`, `velocity`, `score`, `source` ('youtube' \| 'google_trends' \| 'news'), `url`
 
 ### Storage buckets
+
 - `storyboards/` — `{runId}/plano-N.png`
 - `videos/` — `{runId}/final.mp4`
 
@@ -264,15 +283,15 @@ sense() → TrendItem[] → asBriefing() → string
 
 Archivos a modificar:
 
-| Archivo | Qué tocar |
-|---------|-----------|
-| `src/routes/auth.tsx` | Puede **eliminarse** o dejar de enrutarse (quitar del routeTree — aunque es generado, se regenera al borrar el archivo). |
-| `src/routes/index.tsx` | Eliminar el `useEffect` que redirige a `/auth` si no hay sesión; eliminar el botón "Salir"; eliminar `useSession` y el check `if (loading || !session)`. |
-| `src/routes/corrida.$runId.tsx` | Ídem: eliminar redirect a `/auth`, `useSession`, check de loading. |
-| `src/hooks/use-session.ts` | Puede eliminarse (o dejarse sin uso). |
-| `src/lib/runs.functions.ts` | **Quitar `.middleware([requireSupabaseAuth])`** de las 4 server functions. El handler de `listRuns` y `getRun` usan `context.supabase` (provisto por el middleware) — habrá que reemplazarlo por `supabaseAdmin` (ops. de lectura) o un cliente server sin auth. |
-| `src/integrations/supabase/auth-middleware.ts` + `auth-attacher.ts` | Ya no se necesitan (o dejarlos inertes). Son "generados", pero funcionan aunque no se referencien. |
-| `src/start.ts` | Quitar `attachSupabaseAuth` del `functionMiddleware` (si se elimina el archivo, el import rompe el build). |
+| Archivo                                                             | Qué tocar                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/routes/auth.tsx`                                               | Puede **eliminarse** o dejar de enrutarse (quitar del routeTree — aunque es generado, se regenera al borrar el archivo).                                                                                                                                         |
+| `src/routes/index.tsx`                                              | Eliminar el `useEffect` que redirige a `/auth` si no hay sesión; eliminar el botón "Salir"; eliminar `useSession` y el check `if (loading                                                                                                                        |     | !session)`. |
+| `src/routes/corrida.$runId.tsx`                                     | Ídem: eliminar redirect a `/auth`, `useSession`, check de loading.                                                                                                                                                                                               |
+| `src/hooks/use-session.ts`                                          | Puede eliminarse (o dejarse sin uso).                                                                                                                                                                                                                            |
+| `src/lib/runs.functions.ts`                                         | **Quitar `.middleware([requireSupabaseAuth])`** de las 4 server functions. El handler de `listRuns` y `getRun` usan `context.supabase` (provisto por el middleware) — habrá que reemplazarlo por `supabaseAdmin` (ops. de lectura) o un cliente server sin auth. |
+| `src/integrations/supabase/auth-middleware.ts` + `auth-attacher.ts` | Ya no se necesitan (o dejarlos inertes). Son "generados", pero funcionan aunque no se referencien.                                                                                                                                                               |
+| `src/start.ts`                                                      | Quitar `attachSupabaseAuth` del `functionMiddleware` (si se elimina el archivo, el import rompe el build).                                                                                                                                                       |
 
 **Atención**: el middleware `requireSupabaseAuth` inyecta `context.supabase` con claims del usuario. Si se elimina, `listRuns` y `getRun` no tienen `context.supabase` — hay que adjudicar el `supabaseAdmin` (que ya existe en `client.server.ts`) o crear un cliente server sin rol. También `getRun` genera URLs firmadas de storage usando ese cliente — con `supabaseAdmin` funcionará igual.
 
@@ -294,6 +313,7 @@ El **único punto de contacto con Lovable** es `src/lib/ai.server.ts` (la key `L
 6. **Lovable residuals a limpiar**: `AGENTS.md`, `src/lib/lovable-error-reporting.ts` (reporta al editor Lovable — inofensivo pero desechable), la marca del README ("Built with Lovable"), `@lovable.dev/vite-tanstack-config` en `vite.config.ts` + devDependencies (⚠ si se quita, se pierde toda la configuración de build: TanStack Start, nitro, tailwind — requiere reconfigurar `vite.config.ts` manualmente).
 
 ### Riesgos de la migración de IA
+
 - **Los schemas JSON estrictos son el contrato**: `pipeline.server.ts` castea el resultado de `reason<T>` directamente a `Seleccion` y `Record<string, unknown>`. Si el nuevo proveedor no respeta `additionalProperties: false` o devuelve campos extra, los datos entran igual (el tipo es TS-time, no runtime) y la UI los ignora — pero las secciones podrían verse incompletas.
 - **El modelo de razonamiento debe soportar salida estructurada estricta**: no todos los free tiers lo soportan (o lo soportan con esquemas limitados). Verificar Gemini `responseSchema` (usa el formato `Schema` de Google, no el json-schema de OpenAI — requiere traducción), o elegir un endpoint OpenAI-compatible (formato idéntico, migración trivial).
 - **Tiempos de espera**: las llamadas `reason(effort: "high")` con dossier pueden superar 2 minutos — verificar límites de timeout del proveedor elegido (Gemini free tiene límites de contexto/output grandes; Groq es rápido; OpenAI sin `reasoning` también).
@@ -303,26 +323,26 @@ El **único punto de contacto con Lovable** es `src/lib/ai.server.ts` (la key `L
 
 ## Módulos de referencia
 
-| Archivo | Propósito |
-|---------|-----------|
-| `src/lib/ai.server.ts` | ⭐ Capa única de IA — gateway Lovable (razonamiento+imagen+video). Archivo principal del punto #2. |
-| `src/lib/pipeline.server.ts` | ⭐ Orquestador de producción: estados, dossier, storyboard, video, persistencia. |
-| `src/lib/trends.server.ts` | Sensado multi-fuente (YouTube, Trends, News) con scoring de viralidad. |
-| `src/lib/runs.functions.ts` | Server functions RPC — punto de entrada para el dashboard (⭐ tocar para punto #1). |
-| `src/routes/index.tsx` | Dashboard principal con métricas y disparo manual (⭐ tocar para punto #1). |
-| `src/routes/corrida.$runId.tsx` | Detalle de corrida: 5 tabs con todo el dossier (⭐ tocar para punto #1). |
-| `src/routes/auth.tsx` | Login/signup con Supabase Auth (⭐ eliminar para punto #1). |
-| `src/routes/api/public/hooks/produce.ts` | Webhook para scheduler externo (n8n) — autenticado con secreto. |
-| `src/hooks/use-session.ts` | Estado de sesión cliente (⭐ eliminar/neutralizar para punto #1). |
-| `src/integrations/supabase/auth-middleware.ts` | Middleware JWT para serverFns (⭐ eliminar/quitar de puntos #1). |
-| `src/integrations/supabase/auth-attacher.ts` | Adjunta Bearer token desde cliente (⭐ eliminar para punto #1). |
-| `src/integrations/supabase/client.ts` / `client.server.ts` | Clientes Supabase público y admin (service role). |
-| `src/start.ts` | Instancia TanStack Start + middlewares globales (⭐ quitar attachSupabaseAuth). |
-| `src/server.ts` | Server entry — protección ante errores SSR tragados por h3. |
-| `src/lib/error-capture.ts` | Captura errores fuera de banda con TTL para recuperar stacks. |
-| `src/lib/lovable-error-reporting.ts` | Telemetría hacia el editor Lovable — desechable tras migración. |
-| `src/router.tsx` | Crea router con QueryClient. |
-| `src/styles.css` | Tema oscuro completo (tokens oklch, panel, glow, live-dot). |
+| Archivo                                                    | Propósito                                                                                          |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `src/lib/ai.server.ts`                                     | ⭐ Capa única de IA — gateway Lovable (razonamiento+imagen+video). Archivo principal del punto #2. |
+| `src/lib/pipeline.server.ts`                               | ⭐ Orquestador de producción: estados, dossier, storyboard, video, persistencia.                   |
+| `src/lib/trends.server.ts`                                 | Sensado multi-fuente (YouTube, Trends, News) con scoring de viralidad.                             |
+| `src/lib/runs.functions.ts`                                | Server functions RPC — punto de entrada para el dashboard (⭐ tocar para punto #1).                |
+| `src/routes/index.tsx`                                     | Dashboard principal con métricas y disparo manual (⭐ tocar para punto #1).                        |
+| `src/routes/corrida.$runId.tsx`                            | Detalle de corrida: 5 tabs con todo el dossier (⭐ tocar para punto #1).                           |
+| `src/routes/auth.tsx`                                      | Login/signup con Supabase Auth (⭐ eliminar para punto #1).                                        |
+| `src/routes/api/public/hooks/produce.ts`                   | Webhook para scheduler externo (n8n) — autenticado con secreto.                                    |
+| `src/hooks/use-session.ts`                                 | Estado de sesión cliente (⭐ eliminar/neutralizar para punto #1).                                  |
+| `src/integrations/supabase/auth-middleware.ts`             | Middleware JWT para serverFns (⭐ eliminar/quitar de puntos #1).                                   |
+| `src/integrations/supabase/auth-attacher.ts`               | Adjunta Bearer token desde cliente (⭐ eliminar para punto #1).                                    |
+| `src/integrations/supabase/client.ts` / `client.server.ts` | Clientes Supabase público y admin (service role).                                                  |
+| `src/start.ts`                                             | Instancia TanStack Start + middlewares globales (⭐ quitar attachSupabaseAuth).                    |
+| `src/server.ts`                                            | Server entry — protección ante errores SSR tragados por h3.                                        |
+| `src/lib/error-capture.ts`                                 | Captura errores fuera de banda con TTL para recuperar stacks.                                      |
+| `src/lib/lovable-error-reporting.ts`                       | Telemetría hacia el editor Lovable — desechable tras migración.                                    |
+| `src/router.tsx`                                           | Crea router con QueryClient.                                                                       |
+| `src/styles.css`                                           | Tema oscuro completo (tokens oklch, panel, glow, live-dot).                                        |
 
 ---
 

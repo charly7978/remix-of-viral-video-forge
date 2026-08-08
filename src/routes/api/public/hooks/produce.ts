@@ -9,8 +9,7 @@ export const Route = createFileRoute("/api/public/hooks/produce")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const provided =
-          request.headers.get("x-scheduler-secret") ?? request.headers.get("apikey");
+        const provided = request.headers.get("x-scheduler-secret") ?? request.headers.get("apikey");
         const expected = process.env["SCHEDULER_HOOK_SECRET"];
 
         if (!expected || !provided || provided !== expected) {

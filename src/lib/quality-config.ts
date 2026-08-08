@@ -46,7 +46,8 @@ const clamp = (value: number, min: number, max: number) =>
 
 /** Resuelve el gate final: defaults + variables de entorno + override explícito. */
 export function resolveQualityGate(override?: Partial<QualityGate>): QualityGate {
-  const env = typeof process !== "undefined" ? process.env : ({} as Record<string, string | undefined>);
+  const env =
+    typeof process !== "undefined" ? process.env : ({} as Record<string, string | undefined>);
   const fromEnv = Number(env["QUALITY_MIN_SCORE"] ?? "");
   const base: QualityGate = {
     ...DEFAULT_QUALITY_GATE,
