@@ -44,11 +44,18 @@ async function fetchWithRetries(
       // 429 y 5xx son reintentables.
       if (response.status === 429 || response.status >= 500) {
         const body = await response.text().catch(() => "");
-        // Rate limit: respetamos el header Retry-After si viene.
+        // Cuota agotada de forma definitiva (clave sin free tier o revocada):
+        // reintentar no sirve; fallar rápido con el mensaje del proveedor.
+        if (/quota exceeded|limit:\s*0|resource_exhausted|billing/i.test(body)) {
+          return new Response(body, { status: response.status, headers: response.headers });
+        }
+        // Rate limit transitorio: respetamos el header Retry-After si viene.
         const retryAfter = Number(response.headers.get("retry-after") ?? "0");
         const waitMs = retryAfter > 0 ? retryAfter * 1000 : baseDelayMs * 2 ** attempt;
         if (attempt < attempts) {
-          console.warn(`[${options.label}] intento ${attempt} falló (${response.status}): reintento en ${Math.round(waitMs)}ms`);
+          console.warn(
+            `[${options.label}] intento ${attempt} falló (${response.status}): reintento en ${Math.round(waitMs)}ms`,
+          );
           await new Promise((resolve) => setTimeout(resolve, waitMs));
           lastError = new Error(`HTTP ${response.status}: ${body.slice(0, 300)}`);
           continue;
@@ -157,9 +164,7 @@ export async function reason<T>({
         : "Pensá con cuidado y respondé completo.";
 
   const payload = {
-    contents: [
-      { role: "user", parts: [{ text: `${system}\n\n${prompt}\n\n${effortHint}` }] },
-    ],
+    contents: [{ role: "user", parts: [{ text: `${system}\n\n${prompt}\n\n${effortHint}` }] }],
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema: geminiSchema,
@@ -169,11 +174,15 @@ export async function reason<T>({
   };
 
   const url = `${GEMINI_BASE}/models/${model}:streamGenerateContent?alt=sse&key=${key}`;
-  const response = await fetchWithRetries(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }, { label: `gemini:${model}` });
+  const response = await fetchWithRetries(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    { label: `gemini:${model}` },
+  );
 
   if (!response.ok) {
     const body = await response.text();
@@ -244,11 +253,15 @@ export async function generateFrame(prompt: string): Promise<Uint8Array | null> 
   };
 
   const url = `${GEMINI_BASE}/models/${MODEL_IMAGE}:generateContent?key=${key}`;
-  const response = await fetchWithRetries(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }, { label: "gemini:image" });
+  const response = await fetchWithRetries(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    { label: "gemini:image" },
+  );
 
   if (!response.ok) {
     const body = await response.text();
