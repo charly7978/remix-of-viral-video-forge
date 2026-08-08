@@ -93,7 +93,10 @@ export const startRun = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const { runProduction } = await import("./pipeline.server");
-    const id = await runProduction(data.slot, "manual", data.gate);
+    const gate = Object.fromEntries(
+      Object.entries(data.gate ?? {}).filter(([, value]) => typeof value === "number"),
+    ) as Record<string, number>;
+    const id = await runProduction(data.slot, "manual", gate);
     return { id };
   });
 
