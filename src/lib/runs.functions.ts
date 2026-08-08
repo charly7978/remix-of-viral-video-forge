@@ -142,7 +142,9 @@ export const advanceVideo = createServerFn({ method: "POST" })
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data: run, error } = await supabaseAdmin
       .from("runs")
-      .select("id, approved, master_prompt, dossier, video_job_id, video_status, video_url")
+      .select(
+        "id, approved, master_prompt, dossier, storyboard, video_job_id, video_status, video_url",
+      )
       .eq("id", data.id)
       .maybeSingle();
 
@@ -182,7 +184,7 @@ export const advanceVideo = createServerFn({ method: "POST" })
       // Render gratuito e ilimitado con ffmpeg: ensamblamos el video a partir del
       // storyboard (frames), la locución (TTS) y los subtítulos animados.
       if (jobId.startsWith("local:")) {
-        const frames = ((run.dossier as Record<string, unknown>)["storyboard"] ?? []) as Array<{
+        const frames = (run.storyboard ?? []) as Array<{
           numero: number;
           path: string;
         }>;
