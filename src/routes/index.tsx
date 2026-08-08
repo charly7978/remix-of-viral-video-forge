@@ -15,17 +15,17 @@ import { Badge } from "@/components/ui/badge";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "Radar Viral AR | Producción diaria de shorts" },
+      { title: "Forja Viral | Shorts de alto impacto, gratis e ilimitado" },
       {
         name: "description",
         content:
-          "Panel de control que detecta dos veces por día el tema más visto de Argentina y arma el dossier técnico completo del short para YouTube y TikTok.",
+          "Motor de creación de videos virales permanentes con IA gratuita e ilimitada. Sexualidad, horóscopos, mitos, misterios, descubrimientos y efemérides con alcance de 18 a 50+ años.",
       },
-      { property: "og:title", content: "Radar Viral AR | Producción diaria de shorts" },
+      { property: "og:title", content: "Forja Viral | Shorts de alto impacto, gratis e ilimitado" },
       {
         property: "og:description",
         content:
-          "Detección de tendencias argentinas, guion segundo a segundo y prompt maestro listo para generar el video.",
+          "Temas de altísima aceptación, guion segundo a segundo, video cinematográfico y prompt maestro listo para generar. Sin claves ni cuotas.",
       },
     ],
   }),
@@ -101,18 +101,24 @@ function Dashboard() {
     <main className="mx-auto max-w-6xl px-4 py-10 md:px-8">
       <header className="flex flex-wrap items-start justify-between gap-6">
         <div>
-          <p className="label-caps">Argentina · 2 producciones por día</p>
-          <h1 className="mt-2 text-4xl font-bold md:text-5xl">Radar viral AR</h1>
+          <p className="label-caps">IA gratuita e ilimitada · video de alto impacto</p>
+          <h1 className="mt-2 text-4xl font-bold md:text-5xl">Forja viral</h1>
           <p className="mt-3 max-w-xl text-sm text-muted-foreground">
-            Los agentes sensan YouTube, Google Trends y los titulares del día, eligen el tema con
-            más tracción real y devuelven el dossier técnico completo del short: gancho, guion
-            segundo a segundo, plano por plano y prompt maestro listo para el generador de video.
+            El motor usa toda su inteligencia y creatividad para generar shorts virales permanentes
+            de altísimo alcance (de 18 a 50+ años): sexualidad, horóscopos, mitos, misterios
+            profundos, descubrimientos y efemérides. Devuelve el dossier técnico completo: gancho
+            brutal, guion segundo a segundo, plano por plano cinematográfico y un video dinámico con
+            audio nítido y subtítulos integrados.
           </p>
         </div>
       </header>
 
       <section className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <MetricCard icon={<Activity className="size-4" />} label="Corridas" value={String(runs.length)} />
+        <MetricCard
+          icon={<Activity className="size-4" />}
+          label="Corridas"
+          value={String(runs.length)}
+        />
         <MetricCard
           icon={<TrendingUp className="size-4" />}
           label="Puntaje viral medio"
@@ -120,7 +126,7 @@ function Dashboard() {
         />
         <MetricCard
           icon={<Flame className="size-4" />}
-          label="Último tema caliente"
+          label="Último tema de impacto"
           value={lastViral?.topic ?? "Sin datos"}
           small
         />
@@ -143,8 +149,8 @@ function Dashboard() {
 
       <section className="mt-8 grid gap-4 md:grid-cols-2">
         <LaunchCard
-          title="Tema del momento"
-          description="El contenido con más visualizaciones y más velocidad de crecimiento en todo el país, ahora mismo."
+          title="Impacto máximo"
+          description="El ángulo de mayor alcance y compartibilidad entre los pilares permanentes (sexualidad, horóscopos, mitos, misterios, descubrimientos, efemérides). Pensado para volverse viral por su propio mérito."
           icon={<Flame className="size-5" />}
           busy={mutation.isPending && mutation.variables === "viral"}
           disabled={mutation.isPending}
@@ -152,8 +158,8 @@ function Dashboard() {
           primary
         />
         <LaunchCard
-          title="Interés general"
-          description="Efemérides, mitos, horóscopo y misterios tratados con la misma tensión que una noticia de último momento."
+          title="Interés permanente"
+          description="Mito que todos creen, horóscopo del signo más polémico, misterio sin resolver o efeméride del día, tratados con la misma tensión de una revelación de último momento."
           icon={<Sparkles className="size-5" />}
           busy={mutation.isPending && mutation.variables === "general"}
           disabled={mutation.isPending}
@@ -261,7 +267,7 @@ function RunRowCard({ run }: { run: RunRow }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           <Badge variant={run.slot === "viral" ? "default" : "secondary"}>
-            {run.slot === "viral" ? "Tema del momento" : "Interés general"}
+            {run.slot === "viral" ? "Impacto máximo" : "Interés permanente"}
           </Badge>
           <StatusPill status={run.status} />
           <span className="label-caps">{run.triggered_by}</span>

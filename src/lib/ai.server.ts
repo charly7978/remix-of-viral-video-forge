@@ -1,15 +1,20 @@
-// Capa de IA gratuita y robusta. Solo servidor.
-// Razonamiento: cascada Groq (primario) → OpenRouter :free (fallback).
-// Imágenes: Pollinations.ai (sin API key).
-// Video: se maneja en video.server.ts con degradación suave (es opcional).
+// Capa de IA gratuita e ilimitada. Solo servidor.
+// Razonamiento: Pollinations.ai (texto + imágenes, sin API key, sin límites) → Ollama local (fallback opcional).
+// Imágenes: Pollinations.ai — sin API key, sin límites.
+// Video: opcional vía Google Veo con GEMINI_API_KEY (sin clave o sin cuota, la corrida queda con dossier + storyboard + prompt maestro; nunca falla).
 
-const GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions";
-const OPENROUTER_BASE = "https://openrouter.ai/api/v1/chat/completions";
-const POLLINATIONS = "https://image.pollinations.ai/prompt/";
+const POLLINATIONS_TEXT = "https://text.pollinations.ai/";
+const POLLINATIONS_IMAGE = "https://image.pollinations.ai/prompt/";
+const OLLAMA_BASE = "http://localhost:11434/api/chat";
 
-// Modelos free con buen comportamiento de JSON.
-const MODEL_GROQ = "llama-3.3-70b-versatile";
-const MODEL_OPENROUTER = "meta-llama/llama-3.3-70b-instruct:free";
+// Modelos gratuitos en Pollinations (rotación automática de proveedores free).
+const TEXT_MODELS = [
+  "gpt-4o-mini",
+  "claude-3-haiku",
+  "gemini-1.5-flash",
+  "llama-3.3-70b",
+  "mistral-nemo",
+];
 
 // Tamaño del storyboard en píxeles (vertical 9:16, liviano para descargar rápido).
 const FRAME_WIDTH = 540;
@@ -30,22 +35,16 @@ async function fetchWithRetries(
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
-    // Las corridas profundas pueden superar los 2 minutos: un timeout de 4 min
-    // protege contra cuelgues sin cortar razonamientos largos.
-    const timeoutMs = 240_000;
+    const timeoutMs = 300_000;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(url, { ...init, signal: controller.signal });
-      // 429 y 5xx son reintentables.
       if (response.status === 429 || response.status >= 500) {
         const body = await response.text().catch(() => "");
-        // Cuota agotada de forma definitiva (clave sin free tier o revocada):
-        // reintentar no sirve; fallar rápido con el mensaje del proveedor.
         if (/quota exceeded|limit:\s*0|resource_exhausted|billing/i.test(body)) {
           return new Response(body, { status: response.status, headers: response.headers });
         }
-        // Rate limit transitorio: respetamos el header Retry-After si viene.
         const retryAfter = Number(response.headers.get("retry-after") ?? "0");
         const waitMs = retryAfter > 0 ? retryAfter * 1000 : baseDelayMs * 2 ** attempt;
         if (attempt < attempts) {
@@ -134,7 +133,7 @@ function validateShape(schema: JsonSchema, value: unknown, ruta = "$"): void {
 }
 
 // ---------------------------------------------------------------------------
-// Razonamiento con salida JSON estructurada: cascada Groq → OpenRouter.
+// Razonamiento con salida JSON estructurada: Pollinations (gratis, ilimitado) → Ollama local.
 // ---------------------------------------------------------------------------
 
 interface ReasonArgs {
@@ -163,7 +162,6 @@ function toOpenAIMessages(system: string, prompt: string, effortHint: string) {
 
 function parseJsonContent(content: string): unknown {
   const trimmed = content.trim();
-  // Quita fences de markdown si el modelo los agregó igual.
   const sinFences = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   try {
     return JSON.parse(sinFences);
@@ -175,22 +173,20 @@ function parseJsonContent(content: string): unknown {
   }
 }
 
-async function chatWithProvider(
-  baseUrl: string,
-  model: string,
-  apiKeyHeader: string,
+async function chatWithPollinations(
   messages: Array<{ role: string; content: string }>,
   maxTokens: number,
   label: string,
 ): Promise<string> {
+  // Rotación de modelos para distribuir carga
+  const modelIndex = Math.floor(Math.random() * TEXT_MODELS.length);
+  const model = TEXT_MODELS[modelIndex];
+
   const response = await fetchWithRetries(
-    baseUrl,
+    POLLINATIONS_TEXT,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: apiKeyHeader,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model,
         messages,
@@ -214,11 +210,53 @@ async function chatWithProvider(
   return content;
 }
 
+async function chatWithOllama(
+  messages: Array<{ role: string; content: string }>,
+  maxTokens: number,
+  label: string,
+): Promise<string> {
+  // Intenta modelos locales comunes
+  const localModels = ["llama3.1:70b", "llama3.1:8b", "mistral-nemo", "qwen2.5:7b", "gemma2:9b"];
+
+  for (const model of localModels) {
+    try {
+      const response = await fetchWithRetries(
+        OLLAMA_BASE,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model,
+            messages,
+            stream: false,
+            options: {
+              temperature: 0.7,
+              num_predict: maxTokens,
+              format: "json",
+            },
+          }),
+        },
+        { label: `${label}-ollama-${model}`, attempts: 1, baseDelayMs: 500 },
+      );
+
+      if (!response.ok) continue;
+
+      const data = (await response.json()) as { message?: { content?: string }; error?: string };
+      if (data.error) continue;
+      const content = data.message?.content;
+      if (content?.trim()) return content;
+    } catch {
+      continue;
+    }
+  }
+  throw new Error("Ollama no disponible o sin modelos compatibles.");
+}
+
 /**
  * Llamada de razonamiento con salida JSON estructurada.
- * Intenta Groq; si falla (sin clave, cuota, timeout), prueba OpenRouter :free.
- * Si ambos fallan, lanza el último error. Valida la forma del JSON antes de
- * devolverlo para que el pipeline nunca reciba datos a medias.
+ * Usa Pollinations.ai (gratis, sin API key, sin límites) como proveedor principal.
+ * Fallback opcional a Ollama local si está corriendo.
+ * Si ambos fallan, lanza el último error. Valida la forma del JSON antes de devolverlo.
  */
 export async function reason<T>({
   system,
@@ -237,39 +275,10 @@ export async function reason<T>({
   const maxTokens = effort === "high" ? 8192 : 4096;
   const messages = toOpenAIMessages(system, prompt, effortHint);
 
-  const groqKey = process.env["GROQ_API_KEY"];
-  const openRouterKey = process.env["OPENROUTER_API_KEY"];
-
-  const intentos: Array<() => Promise<string>> = [];
-  if (groqKey)
-    intentos.push(() =>
-      chatWithProvider(GROQ_BASE, MODEL_GROQ, `Bearer ${groqKey}`, messages, maxTokens, "groq"),
-    );
-  if (openRouterKey) {
-    intentos.push(() =>
-      chatWithProvider(
-        OPENROUTER_BASE,
-        MODEL_OPENROUTER,
-        `Bearer ${openRouterKey}`,
-        [
-          ...messages,
-          {
-            role: "user",
-            content:
-              "Si el modelo anterior no respondió o se quedó sin cuota, respondé vos con el mismo JSON.",
-          },
-        ],
-        maxTokens,
-        "openrouter",
-      ),
-    );
-  }
-
-  if (intentos.length === 0) {
-    throw new Error(
-      "No hay claves de IA configuradas: falta GROQ_API_KEY u OPENROUTER_API_KEY en el servidor.",
-    );
-  }
+  const intentos: Array<() => Promise<string>> = [
+    () => chatWithPollinations(messages, maxTokens, "pollinations"),
+    () => chatWithOllama(messages, maxTokens, "ollama"),
+  ];
 
   let ultimoError: Error | null = null;
   for (const intento of intentos) {
@@ -284,29 +293,38 @@ export async function reason<T>({
     }
   }
 
-  throw ultimoError ?? new Error("Todas las llamadas de IA fallaron.");
+  throw (
+    ultimoError ??
+    new Error(
+      "Todas las llamadas de IA fallaron. Verificá conectividad a Pollinations.ai o levantá Ollama local.",
+    )
+  );
 }
 
 // ---------------------------------------------------------------------------
-// Generación de imágenes (Pollinations, sin API key).
+// Generación de imágenes (Pollinations, sin API key, sin límites).
 // ---------------------------------------------------------------------------
 
 /** Genera una imagen de storyboard. Devuelve bytes PNG o null si no pudo. */
 export async function generateFrame(prompt: string): Promise<Uint8Array | null> {
-  const url = `${POLLINATIONS}${encodeURIComponent(
-    `${prompt}. Vertical 9:16 short-form video frame, cinematic, high contrast, no watermark, no text`,
-  )}?width=${FRAME_WIDTH}&height=${FRAME_HEIGHT}&nologo=true&model=flux`;
+  const url = `${POLLINATIONS_IMAGE}${encodeURIComponent(
+    `${prompt}. Vertical 9:16 short-form video frame, cinematic, high contrast, no watermark, no text, professional lighting, 8k quality`,
+  )}?width=${FRAME_WIDTH}&height=${FRAME_HEIGHT}&nologo=true&model=flux&enhance=true`;
 
   try {
-    const response = await fetchWithRetries(url, { method: "GET" }, { label: "pollinations" });
+    const response = await fetchWithRetries(
+      url,
+      { method: "GET" },
+      { label: "pollinations-image" },
+    );
     if (!response.ok) {
-      console.warn(`[pollinations] ${response.status}: no se pudo generar la imagen.`);
+      console.warn(`[pollinations-image] ${response.status}: no se pudo generar la imagen.`);
       return null;
     }
     return new Uint8Array(await response.arrayBuffer());
   } catch (error) {
     console.warn(
-      `[pollinations] no se pudo generar la imagen: ${error instanceof Error ? error.message : String(error)}`,
+      `[pollinations-image] no se pudo generar la imagen: ${error instanceof Error ? error.message : String(error)}`,
     );
     return null;
   }
@@ -323,8 +341,5 @@ export async function generateFrame(prompt: string): Promise<Uint8Array | null> 
  * real del video se maneja en video.server.ts (admite Veo con GEMINI_API_KEY).
  */
 export async function generateVideo(_prompt: string): Promise<Uint8Array | null> {
-  // Los free tiers de video (Pika, Runway, Kling) requieren OAuth de usuario,
-  // no API key de servidor. Mantenemos la firma para compatibilidad y
-  // devolvemos null: la UI ya maneja "video no disponible".
   return null;
 }

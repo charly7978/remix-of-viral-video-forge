@@ -1,4 +1,4 @@
-// Orquestador de la producción diaria. Solo servidor.
+// Orquestador de la producción de shorts virales permanentes. Solo servidor.
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { generateFrame, reason } from "./ai.server";
 import { evaluateQuality, type QualityCheck } from "./quality.server";
@@ -68,6 +68,18 @@ const dossierSchema = obj({
     disparador_de_comentarios: str,
   }),
   prompt_maestro_video: str,
+  estilo_visual: obj({
+    paleta: str,
+    grade: str,
+    lente: str,
+    profundidad: str,
+  }),
+  subtitulos: obj({
+    tipografia: str,
+    animacion: str,
+    posicion: str,
+    contraste: str,
+  }),
   planos: {
     type: "array",
     items: obj({
@@ -76,6 +88,7 @@ const dossierSchema = obj({
       prompt_generacion: str,
       movimiento_camara: str,
       iluminacion: str,
+      angulo: str,
     }),
   },
   audio: obj({
@@ -83,6 +96,7 @@ const dossierSchema = obj({
     musica: str,
     efectos: str,
     ritmo: str,
+    mezcla: str,
   }),
   publicacion: obj({
     titulo_youtube: str,
@@ -120,20 +134,24 @@ export interface Seleccion {
   descartados: Array<{ tema: string; motivo: string; puntaje: number }>;
 }
 
-const ESTRATEGA = `Sos el director de contenido de una operación comercial de shorts verticales en Argentina.
-Tu único objetivo es la retención y las visualizaciones que generan ingresos. No hacés contenido infantil,
-no hacés obviedades, no repetís lo que ya está saturado. Pensás como un editor de tabloide con rigor de periodista:
-gancho brutal, dato real, cero relleno. Escribís en español rioplatense natural, sin argentinismos forzados.`;
+const ESTRATEGA = `Sos el director creativo de una fábrica de shorts virales de altísimo impacto, pensados para
+volverse virales de verdad: se comparten solos. No perseguís la tendencia del día ni el contenido pasajero;
+aprovechás toda tu inteligencia, razonamiento y creatividad para construir piezas permanentes de alcance masivo.
+Tu público va de los 18 a los 50+ años: el gancho tiene que funcionar en un pibe de 20 y en un padre de 45.
+No hagás contenido infantil, no hagás obviedades, no repitas lo que ya está saturado. Pensás como un editor de
+tabloide con rigor de investigador: gancho brutal, dato real, giro inesperado, cero relleno. Escribís en español
+rioplatense natural, sin argentinismos forzados, pero con vocabulario que entienda cualquiera.`;
 
 const REGLAS_DE_IMPACTO = `Reglas de impacto no negociables:
 - Los primeros 3 segundos deciden todo: imagen imposible de ignorar + una frase que abra un bucle mental.
 - Una sola idea por short, llevada al extremo. Si hay dos ideas, sobra una.
 - Tensión creciente: cada 5 segundos algo tiene que cambiar (dato nuevo, giro, contradicción, revelación).
-- Corte visual cada 1,5 a 3 segundos, sin mesetas ni relleno.
+- Corte visual cada 1,5 a 3 segundos, sin mesetas ni relleno. Ritmo trepidante pero legible.
 - Prohibido: saludos, despedidas, "hoy te voy a contar", "dato curioso", pedidos genéricos de suscripción.
 - Prohibido repetir frases, ideas o estructuras: cada línea aporta información nueva.
-- El texto en pantalla no transcribe la voz: la refuerza con 3 a 6 palabras de golpe.
-- El cierre deja una pregunta abierta o una afirmación discutible que obliga a comentar o a rebobinar.`;
+- El texto en pantalla no transcribe la voz: la refuerza con 3 a 6 palabras de golpe, tipografía gigante y legible.
+- El cierre deja una pregunta abierta o una afirmación discutible que obliga a comentar o a rebobinar.
+- El tema tiene que tener alcance transgeneracional: que lo comparta un adolescente y también su viejo.`;
 
 function fechaHoy(): string {
   return new Intl.DateTimeFormat("es-AR", {
@@ -145,12 +163,14 @@ function fechaHoy(): string {
 async function seleccionar(slot: Slot, briefing: string): Promise<Seleccion> {
   const consigna =
     slot === "viral"
-      ? `Elegí EL tema con más visualizaciones y más calor real en Argentina en este momento, priorizando
-velocidad de visualizaciones por hora sobre volumen acumulado. Debe ser un tema que todavía tenga
-ventana: si ya está exprimido por todos, elegí el ángulo lateral que nadie tocó.`
-      : `Elegí un tema de interés general atemporal pero anclado a HOY (efeméride del día, mito, horóscopo,
-misterio histórico, dato de ciencia contraintuitivo, curiosidad argentina). Prohibido el tono de
-"dato curioso" blando: tiene que tener la misma tensión y el mismo impacto que una nota de último momento.`;
+      ? `Elegí el ángulo de MÁXIMO impacto y alcance masivo entre los pilares permanentes (sexualidad,
+ horóscopos, mitos, efemérides, misterios profundos, descubrimientos recientes, psicología, dinero).
+ Priorizá el tema que más se va a compartir solo y que funciona de los 18 a los 50+ años. Si el pilar
+ está saturado, elegí el ángulo lateral que nadie contó todavía.`
+      : `Elegí un tema atemporal de altísima aceptación (mito que todos creen, horóscopo del signo más
+ polémico, misterio sin resolver, efeméride de hoy, descubrimiento reciente que cambia lo que sabíamos).
+ Prohibido el tono de "dato curioso" blando: tiene que tener la misma tensión y el mismo impacto que una
+ revelación de último momento, pero pensado para durar y volverse viral cada vez que se comparte.`;
 
   return reason<Seleccion>({
     system: ESTRATEGA,
@@ -162,27 +182,27 @@ misterio histórico, dato de ciencia contraintuitivo, curiosidad argentina). Pro
 ${consigna}
 
 Método obligatorio de selección (hacelo internamente y devolvé solo el resultado):
-1. Armá una lista corta de 6 temas candidatos a partir del material sensado, agrupando señales que
-   hablan del mismo hecho aunque estén escritas distinto.
-2. Puntuá cada candidato de 0 a 100 con estos pesos: velocidad de crecimiento 30, carga emocional 25,
-   potencial de discusión y comentarios 20, ventana restante 15, facilidad de producción en 45 segundos 10.
+1. Armá una lista corta de 6 temas candidatos a partir de los pilares permanentes, buscando ángulos
+   con gancho brutal y alcance transgeneracional.
+2. Puntuá cada candidato de 0 a 100 con estos pesos: potencia emocional 30, alcance de audiencia (18-50+) 25,
+   potencial de discusión y comentarios 20, originalidad del ángulo 15, facilidad de producción en 45-55 segundos 10.
 3. Descartá todo tema que dependa de imágenes de archivo imposibles, que sea puro chisme sin dato,
    que ya esté saturado sin ángulo nuevo, o que arriesgue desmonetización.
 4. Quedate con el ganador y devolvé los otros cinco como descartados, con motivo y puntaje.
 
 Reglas de tracción no negociables: no elijas un tema que el ranking compuesto marque como
-DESCARTAR. Si ningún tema es APTO, cambiá a un ángulo de interés general de alto impacto antes que
+DESCARTAR. Si ningún tema es APTO, cambiá a un ángulo permanente de alto impacto antes que
 producir sobre un tema frío (mínimos: ${TRACTION_THRESHOLDS.minFuentes} fuentes, ${TRACTION_THRESHOLDS.minSenales} señales,
 puntaje ${TRACTION_THRESHOLDS.minScore}).
 
-Material sensado en vivo:
+Pilares disponibles y señales:
 ${briefing}
 
 Además del tema ganador, devolvé:
-- gancho_tentativo: la frase exacta de los primeros 3 segundos.
+- gancho_tentativo: la frase exacta de los primeros 3 segundos (menos de 22 palabras, golpe mental).
 - promesa_de_valor: qué se lleva el espectador si se queda hasta el final.
 - disparador_de_discusion: la afirmación o pregunta que va a llenar los comentarios.
-- datos_verificables: afirmaciones factuales que el guion puede sostener.
+- datos_verificables: afirmaciones factuales o basadas en estudios que el guion puede sostener.
 - riesgos: reputacionales o de desmonetización.`,
   });
 }
@@ -198,8 +218,8 @@ async function escribirDossier(
     schemaName: "dossier",
     schema: dossierSchema,
     effort: "high",
-    prompt: `Producí el dossier técnico completo de un short vertical 9:16 de 40 a 55 segundos para YouTube
-Shorts y TikTok, en español rioplatense.
+    prompt: `Producí el dossier técnico completo de un short vertical 9:16 de 45 a 55 segundos para YouTube
+Shorts y TikTok, en español rioplatense, pensado para volverse viral por su propio mérito (se comparte solo).
 
 Tema: ${seleccion.tema}
 Ángulo: ${seleccion.angulo}
@@ -208,7 +228,7 @@ Audiencia: ${seleccion.audiencia}
 Gancho de referencia: ${seleccion.gancho_tentativo}
 Promesa: ${seleccion.promesa_de_valor}
 Disparador de discusión: ${seleccion.disparador_de_discusion}
-Franja: ${slot === "viral" ? "tema caliente del día" : "interés general de alto impacto"}
+Franja: ${slot === "viral" ? "impacto masivo permanente" : "interés permanente de alto impacto"}
 Datos que se pueden afirmar: ${seleccion.datos_verificables.join(" | ")}
 Riesgos a esquivar: ${seleccion.riesgos.join(" | ")}
 
@@ -216,13 +236,30 @@ ${REGLAS_DE_IMPACTO}
 
 ${templateBriefing(template, semilla)}
 
+REQUISITOS DE PRODUCCIÓN DE ALTA CALIDAD (esto NO es un PowerPoint con audio):
+- El video debe sentirse cinematográfico y dinámico: cámara en movimiento constante (push-in, parallax,
+  whip-pan, drone, handheld orgánico), profundidad de campo, iluminación con carácter (key + rim light),
+  grade de color coherente y paleta cuidada. Cero planos estáticos muertos.
+- Audio nítido y llamativo: voz en off cálida y cercana (no robótica), música con gancho que sube de
+  intensidad, efectos de sonido que aterrizan cada corte, y un bajo bien definido. El audio tiene que
+  invitar a no pausar.
+- Subtítulos integrados de forma nativa: tipografía grande, legible, con contraste y animación de entrada
+  por palabra o línea; no un bloque plano abajo. El subtítulo es parte del diseño, no un agregado.
+- Enfoques visuales dinámicos: cortes cada 1,5 a 2,5 segundos sincronizados con el beat, zooms rápidos,
+  transiciones con momentum, splits y PiP solo cuando suman. Ritmo trepidante pero que se entiende.
+- Cada plano debe ser visualmente distinto al anterior (ángulo, escala, color, movimiento) para sostener
+  la atención hasta el final.
+
 Requisitos estructurales:
 - El guion va segundo a segundo, sin huecos ni superposiciones: cada tramo arranca exactamente donde
-  termina el anterior, desde 0 hasta la duración final (entre 40 y 55 segundos).
-- planos: entre 12 y 18 planos, cada uno con su prompt de generación en inglés técnico.
+  termina el anterior, desde 0 hasta la duración final (entre 45 y 55 segundos).
+- planos: entre 16 y 22 planos, cada uno con su prompt de generación en inglés técnico, especificando
+  ángulo de cámara, movimiento, lente, iluminación y paleta.
 - prompt_maestro_video: un único prompt largo, autosuficiente y en inglés técnico, listo para pegar en un
-  generador de video por IA. Debe incluir formato vertical 9:16, duración, estilo visual, paleta, tipo de
-  lente, iluminación, ritmo de montaje, tratamiento de texto en pantalla y referencia de audio.
+  generador de video por IA de alta calidad. Debe incluir: formato vertical 9:16, duración ~50s, estilo
+  visual cinematográfico, paleta, tipo de lente, iluminación con carácter, movimiento de cámara constante,
+  ritmo de montaje (corte cada 1,5-2,5s), tratamiento de texto en pantalla animado y referencia de audio
+  (voz cálida + música con gancho + SFX por corte).
 - La descripción de YouTube y el caption de TikTok tienen que estar escritos para el algoritmo y para el
   humano al mismo tiempo, con las palabras clave del tema al principio.
 - control_de_calidad: la lista de verificaciones que este short ya cumple, punto por punto.`,
@@ -256,7 +293,9 @@ ${REGLAS_DE_IMPACTO}
 ${templateBriefing(template, semilla)}
 
 Corregí especialmente el gancho (tiene que ser más brutal y más concreto), la curva de tensión, las
-repeticiones y el cierre. Mantené el guion continuo sin huecos y entre 40 y 55 segundos.
+repeticiones y el cierre. Mejorá la producción visual: cámara en movimiento constante, iluminación con
+carácter, paleta y grade coherentes, subtítulos animados integrados y audio nítido con música de gancho.
+Mantené el guion continuo sin huecos y entre 45 y 55 segundos, con 16 a 22 planos cinematográficos.
 
 Dossier rechazado:
 ${JSON.stringify(dossier).slice(0, 40_000)}`,
@@ -267,14 +306,14 @@ async function renderStoryboard(
   runId: string,
   planos: Array<{ numero?: number; prompt_generacion?: string }>,
 ): Promise<Array<{ numero: number; path: string }>> {
-  const seleccionados = planos.slice(0, 3);
+  const seleccionados = planos.slice(0, 6);
   const frames: Array<{ numero: number; path: string }> = [];
 
   for (const plano of seleccionados) {
     if (!plano.prompt_generacion) continue;
     try {
       const bytes = await generateFrame(
-        `${plano.prompt_generacion}. Vertical 9:16 aspect ratio, cinematic short-form video frame, high contrast, no watermark, no captions.`,
+        `${plano.prompt_generacion}. Vertical 9:16 aspect ratio, cinematic short-form video frame, high contrast, professional lighting, shallow depth of field, film grain, 8k quality, no watermark, no captions.`,
       );
       if (!bytes) continue;
       const path = `${runId}/plano-${plano.numero ?? frames.length + 1}.png`;
@@ -342,7 +381,10 @@ export async function runProduction(
     }
 
     await supabaseAdmin.from("runs").update({ status: "rendering" }).eq("id", runId);
-    const planos = (dossier["planos"] ?? []) as Array<{ numero?: number; prompt_generacion?: string }>;
+    const planos = (dossier["planos"] ?? []) as Array<{
+      numero?: number;
+      prompt_generacion?: string;
+    }>;
     const storyboard = await renderStoryboard(runId, planos);
 
     const masterPrompt = String(dossier["prompt_maestro_video"] ?? "");
@@ -401,11 +443,22 @@ export function videoPrompt(masterPrompt: string, dossier: Record<string, unknow
   const hook = (dossier["hook"] ?? {}) as Record<string, unknown>;
   const onScreen = String(hook["texto_en_pantalla"] ?? "").trim();
   const action = String(hook["accion_visual"] ?? "").trim();
+  const visual = (dossier["estilo_visual"] ?? {}) as Record<string, unknown>;
+  const subs = (dossier["subtitulos"] ?? {}) as Record<string, unknown>;
+  const audio = (dossier["audio"] ?? {}) as Record<string, unknown>;
   return [
     masterPrompt,
+    visual["paleta"] ? `Color palette: ${String(visual["paleta"])}.` : "",
+    visual["grade"] ? `Color grade: ${String(visual["grade"])}.` : "",
+    visual["lente"] ? `Lens: ${String(visual["lente"])}.` : "",
     action ? `Opening shot: ${action}.` : "",
-    onScreen ? `On-screen text overlay, bold condensed sans-serif: "${onScreen}".` : "",
-    "Vertical 9:16, fast cuts every 1.5 seconds, cinematic contrast, no watermark, no letterboxing.",
+    onScreen
+      ? `Animated on-screen subtitles, ${String(subs["tipografia"] ?? "bold condensed sans-serif")}, word-by-word reveal: "${onScreen}".`
+      : "",
+    audio["musica"]
+      ? `Audio: warm voiceover + hook-driven music (${String(audio["musica"])}) + per-cut SFX.`
+      : "",
+    "Vertical 9:16, constant camera motion (push-in, parallax, whip-pan), fast cuts every 1.5-2.5 seconds, cinematic contrast, shallow depth of field, film grain, no watermark, no letterboxing.",
   ]
     .filter(Boolean)
     .join(" ");

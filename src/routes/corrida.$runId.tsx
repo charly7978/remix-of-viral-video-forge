@@ -151,9 +151,13 @@ function RunDetail() {
                 size="sm"
                 variant="secondary"
                 disabled={videoMutation.isPending || !aprobado}
-                onClick={() => videoMutation.mutate(Boolean(query.data?.videoUrl) || videoStatus === "failed")}
+                onClick={() =>
+                  videoMutation.mutate(Boolean(query.data?.videoUrl) || videoStatus === "failed")
+                }
               >
-                <RefreshCw className={`size-3.5 ${videoMutation.isPending ? "animate-spin" : ""}`} />
+                <RefreshCw
+                  className={`size-3.5 ${videoMutation.isPending ? "animate-spin" : ""}`}
+                />
                 {query.data.videoUrl ? "Regenerar" : "Generar ahora"}
               </Button>
             }
@@ -262,10 +266,7 @@ function RunDetail() {
               value={list(calidad["frases_repetidas"]).map(String).join(" | ")}
             />
             <Field label="Bloqueos" value={list(calidad["bloqueos"]).map(String).join("\n")} />
-            <Field
-              label="Umbrales de aprobación aplicados"
-              value={gateResumen(calidad["gate"])}
-            />
+            <Field label="Umbrales de aprobación aplicados" value={gateResumen(calidad["gate"])} />
             <Field
               label="Intentos de escritura"
               value={String(dossier["intentos_de_calidad"] ?? "")}
@@ -278,7 +279,10 @@ function RunDetail() {
                 {list(calidad["problemas"]).map((raw, index) => {
                   const problema = dict(raw);
                   return (
-                    <div key={index} className="rounded-md border border-border bg-secondary/40 p-4">
+                    <div
+                      key={index}
+                      className="rounded-md border border-border bg-secondary/40 p-4"
+                    >
                       <p className="label-caps">{text(problema["area"])}</p>
                       <p className="mt-2 text-sm">{text(problema["detalle"])}</p>
                       <p className="mt-2 text-sm text-primary">{text(problema["correccion"])}</p>
@@ -412,7 +416,11 @@ function RunDetail() {
           <Panel title="Miniatura y horario">
             <Field label="Mejor horario (AR)" value={text(publicacion["mejor_horario_ar"])} />
             <Field label="Texto de miniatura" value={text(publicacion["texto_miniatura"])} />
-            <Field label="Prompt de miniatura" value={text(publicacion["prompt_miniatura"])} copyable />
+            <Field
+              label="Prompt de miniatura"
+              value={text(publicacion["prompt_miniatura"])}
+              copyable
+            />
           </Panel>
           <Panel title="Monetización">
             <Field label="Ángulo comercial" value={text(monetizacion["angulo_comercial"])} />
@@ -427,7 +435,10 @@ function RunDetail() {
         <TabsContent value="inteligencia" className="space-y-4">
           <Panel title="Por qué este tema">
             <Field label="Por qué ahora" value={text(seleccion["por_que_ahora"])} />
-            <Field label="Ventana de oportunidad" value={text(seleccion["ventana_de_oportunidad"])} />
+            <Field
+              label="Ventana de oportunidad"
+              value={text(seleccion["ventana_de_oportunidad"])}
+            />
             <Field label="Audiencia" value={text(seleccion["audiencia"])} />
             <Field label="Competencia" value={text(seleccion["saturacion_competencia"])} />
             <Field
@@ -437,7 +448,7 @@ function RunDetail() {
             <Field label="Riesgos" value={list(seleccion["riesgos"]).join(" · ")} />
           </Panel>
 
-          <Panel title="Candidatos sensados">
+          <Panel title="Temas generados">
             <div className="space-y-2">
               {query.data.candidates.map((candidate) => (
                 <a
@@ -449,7 +460,9 @@ function RunDetail() {
                 >
                   <span className="line-clamp-1">{candidate.title}</span>
                   <span className="label-caps shrink-0">
-                    {candidate.views ? `${candidate.views.toLocaleString("es-AR")} vistas` : candidate.source}
+                    {candidate.views
+                      ? `${candidate.views.toLocaleString("es-AR")} vistas`
+                      : candidate.source}
                   </span>
                 </a>
               ))}
@@ -541,12 +554,7 @@ function ProviderAlert({
                   </a>
                 </Button>
               ) : (
-                <Button
-                  key={accion.label}
-                  size="sm"
-                  disabled={reintentando}
-                  onClick={onRetry}
-                >
+                <Button key={accion.label} size="sm" disabled={reintentando} onClick={onRetry}>
                   <RefreshCw className={`size-3.5 ${reintentando ? "animate-spin" : ""}`} />
                   {accion.label}
                 </Button>

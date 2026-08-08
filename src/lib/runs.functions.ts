@@ -87,6 +87,35 @@ const gateSchema = z
   })
   .optional();
 
+function fmtTime(seg: number): string {
+  const h = Math.floor(seg / 3600);
+  const m = Math.floor((seg % 3600) / 60);
+  const s = Math.floor(seg % 60);
+  const ms = Math.floor((seg - Math.floor(seg)) * 1000);
+  const pad = (n: number, l = 2) => String(n).padStart(l, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms, 3)}`;
+}
+
+/** Construye un SRT a partir del guion: cada beat con su voz en off y su texto en pantalla. */
+function buildSrt(
+  guion: Array<{
+    desde_seg: number;
+    hasta_seg: number;
+    voz_en_off: string;
+    texto_en_pantalla: string;
+  }>,
+): string {
+  const segments = guion
+    .filter(
+      (g) => (g.voz_en_off || g.texto_en_pantalla) && Number(g.hasta_seg) > Number(g.desde_seg),
+    )
+    .map((g, i) => {
+      const text = (g.texto_en_pantalla || g.voz_en_off || "").trim();
+      return `${i + 1}\n${fmtTime(Number(g.desde_seg))} --> ${fmtTime(Number(g.hasta_seg))}\n${text}`;
+    });
+  return segments.join("\n\n");
+}
+
 export const startRun = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z.object({ slot: z.enum(["viral", "general"]), gate: gateSchema }).parse(input),
@@ -124,7 +153,8 @@ export const advanceVideo = createServerFn({ method: "POST" })
       return { status: "blocked", progress: 0, message: "El short no pasó el control de calidad." };
     }
 
-    const { startVideoJob, getVideoJob, downloadVideo } = await import("./video.server");
+    const { startVideoJob, getVideoJob, downloadVideo, assembleVideo } =
+      await import("./video.server");
     const { videoPrompt } = await import("./pipeline.server");
 
     try {
@@ -139,9 +169,96 @@ export const advanceVideo = createServerFn({ method: "POST" })
         jobId = job.id;
         await supabaseAdmin
           .from("runs")
-          .update({ video_job_id: jobId, video_status: "in_progress", video_url: null, error: null })
+          .update({
+            video_job_id: jobId,
+            video_status: "in_progress",
+            video_url: null,
+            error: null,
+          })
           .eq("id", data.id);
         return { status: "in_progress", progress: job.progress ?? 0 };
+      }
+
+      // Render gratuito e ilimitado con ffmpeg: ensamblamos el video a partir del
+      // storyboard (frames), la locución (TTS) y los subtítulos animados.
+      if (jobId.startsWith("local:")) {
+        const frames = ((run.dossier as Record<string, unknown>)["storyboard"] ?? []) as Array<{
+          numero: number;
+          path: string;
+        }>;
+        if (!frames || frames.length === 0) {
+          await supabaseAdmin
+            .from("runs")
+            .update({ video_status: "failed", error: "Sin frames del storyboard para ensamblar." })
+            .eq("id", data.id);
+          return {
+            status: "failed",
+            progress: 0,
+            message: "Sin frames del storyboard para ensamblar.",
+          };
+        }
+
+        const dossier = (run.dossier ?? {}) as Record<string, unknown>;
+        const guion = (dossier["guion"] ?? []) as Array<{
+          desde_seg: number;
+          hasta_seg: number;
+          voz_en_off: string;
+          texto_en_pantalla: string;
+        }>;
+        const voiceover = guion
+          .map((g) => g.voz_en_off)
+          .filter(Boolean)
+          .join(" ");
+        const durationSec =
+          guion.length > 0
+            ? Math.max(...guion.map((g) => Number(g.hasta_seg) || 0))
+            : frames.length * 3;
+
+        // Descargar frames desde Supabase al tmp local para que ffmpeg los lea.
+        const { promises: fsp } = await import("node:fs");
+        const { tmpdir } = await import("node:os");
+        const nodePath = await import("node:path");
+        const tmp = await fsp.mkdtemp(nodePath.join(tmpdir(), "vframes-"));
+        const localFrames = [];
+        for (const f of frames) {
+          const { data: signed } = await supabaseAdmin.storage
+            .from("storyboards")
+            .createSignedUrl(f.path, 600);
+          if (!signed?.signedUrl) continue;
+          const res = await fetch(signed.signedUrl);
+          if (!res.ok) continue;
+          const buf = Buffer.from(await res.arrayBuffer());
+          const local = nodePath.join(tmp, `plano-${f.numero}.png`);
+          await fsp.writeFile(local, buf);
+          localFrames.push({ numero: f.numero, path: local });
+        }
+
+        const subs = await buildSrt(guion);
+        const subsPath = nodePath.join(tmp, "subs.srt");
+        if (subs) await fsp.writeFile(subsPath, subs);
+
+        const assembleArgs: Parameters<typeof assembleVideo>[0] = {
+          frames: localFrames,
+          voiceover,
+          durationSec,
+          runId: data.id,
+        };
+        if (subs) assembleArgs.subtitles = subsPath;
+
+        const bytes = await assembleVideo(assembleArgs);
+
+        const videoPath = `${data.id}/short.mp4`;
+        const { error: uploadError } = await supabaseAdmin.storage
+          .from("videos")
+          .upload(videoPath, bytes, { contentType: "video/mp4", upsert: true });
+        if (uploadError) throw new Error(uploadError.message);
+        await fsp.rm(tmp, { recursive: true, force: true });
+
+        await supabaseAdmin
+          .from("runs")
+          .update({ video_url: videoPath, video_status: "completed", error: null })
+          .eq("id", data.id);
+        return { status: "completed", progress: 100 };
       }
 
       const job = await getVideoJob(jobId);

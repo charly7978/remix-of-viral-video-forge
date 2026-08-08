@@ -1,13 +1,20 @@
-# Radar Viral AR — Guía para agentes de IA
+# Forja Viral — Guía para agentes de IA
 
 ## Stack
 
 - **Framework**: TanStack Start (React 19) con Vite y Nitro (SSR).
 - **Base de datos + storage**: Supabase (PostgreSQL, buckets `storyboards` y `videos`).
-- **IA gratuita** (sin consumo de créditos):
-  - **Razonamiento**: cascada **Groq** (`llama-3.3-70b-versatile`, clave `GROQ_API_KEY`) → **OpenRouter** modelo `:free` (clave `OPENROUTER_API_KEY`). Con una alcanza; con ambas hay fallback automático.
-  - **Imágenes** (storyboard): **Pollinations.ai** — sin API key.
-  - **Video**: opcional vía Google Veo con `GEMINI_API_KEY` (sin clave o sin cuota, la corrida queda con dossier + storyboard + prompt maestro; nunca falla).
+- **IA gratuita e ilimitada** (sin claves ni cuotas):
+  - **Razonamiento**: **Pollinations.ai** (`text.pollinations.ai`, modelos free rotativos) como proveedor principal — sin API key, sin límites de uso. Fallback opcional a **Ollama** local si está corriendo.
+  - **Imágenes** (storyboard): **Pollinations.ai** — sin API key, sin límites.
+  - **Video**: render gratuito e ilimitado con **ffmpeg** (ensamblado del storyboard + TTS + subtítulos animados). Opcionalmente Google Veo con `GEMINI_API_KEY` como calidad premium; sin clave, el render local gratuito toma el relevo. Nunca falla.
+
+## Estrategia de contenido
+
+- NO se persiguen tendencias del día ni contenidos virales pasajeros.
+- Se usa toda la capacidad de razonamiento, inteligencia y creatividad del modelo para generar videos virales de muy alto impacto, con alcance de 18 a 50+ años.
+- Pilares permanentes de alta aceptación: sexualidad, horóscopos, mitos, efemérides importantes, misterios profundos, descubrimientos recientes, psicología y dinero.
+- La cadena de producción prioriza calidad: imagen cinematográfica (cámara en movimiento, iluminación con carácter, grade coherente), audio nítido y llamativo (voz cálida + música con gancho + SFX), subtítulos integrados animados, enfoques visuales dinámicos y ritmo trepidante. El resultado debe ser dinámico y fresco, no un PowerPoint con audio.
 
 ## Convenciones
 
@@ -22,4 +29,4 @@
 
 ## Arquitectura en una línea
 
-`src/routes/*.tsx` (UI) → `src/lib/runs.functions.ts` (server functions) → `src/lib/pipeline.server.ts` (orquestador) → `src/lib/ai.server.ts` (razonamiento Groq→OpenRouter + imágenes Pollinations) + `src/lib/video.server.ts` (video opcional) y `src/lib/trends.server.ts` (sensado) → persistencia en Supabase (`src/integrations/supabase/client.server.ts`).
+`src/routes/*.tsx` (UI) → `src/lib/runs.functions.ts` (server functions) → `src/lib/pipeline.server.ts` (orquestador) → `src/lib/ai.server.ts` (razonamiento Pollinations + imágenes Pollinations) + `src/lib/video.server.ts` (render ffmpeg gratuito / Veo) y `src/lib/trends.server.ts` (motor de temas permanentes) → persistencia en Supabase (`src/integrations/supabase/client.server.ts`).
