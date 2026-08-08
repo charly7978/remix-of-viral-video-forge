@@ -69,23 +69,23 @@ export function classifyProviderError(raw: unknown): ProviderErrorInfo {
   if (
     has(lower, [
       "no hay claves de ia",
-      "falta groq_api_key",
-      "falta openrouter_api_key",
       "falta gemini_api_key",
-      "falta ",
       "no hay gemini_api_key",
       "api key not valid",
+      "gemini",
       "401",
       "403",
     ])
   ) {
     return {
       kind: "missing_key",
-      titulo: "Falta una clave de IA configurada",
+      titulo: "Falta la clave de IA para el video",
       detalle: message,
       acciones: [
-        { label: "Obtener clave de Groq (gratis)", href: "https://console.groq.com/keys" },
-        { label: "Obtener clave de OpenRouter", href: "https://openrouter.ai/keys" },
+        {
+          label: "Obtener clave de Google AI Studio (video premium)",
+          href: "https://aistudio.google.com/apikey",
+        },
         { label: "Reintentar generación", action: "reintentar" },
       ],
       reintentable: false,

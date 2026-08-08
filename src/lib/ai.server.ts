@@ -1,20 +1,31 @@
 // Capa de IA gratuita e ilimitada. Solo servidor.
 //
 // Razonamiento (texto/JSON estructurado):
-//   1. Ollama local — gratuita, ilimitada, sin claves, sin cuotas. Maneja prompts
-//      largos (context window local). Es el proveedor principal cuando está activo.
-//   2. Generador determinístico local — fallback garantizado que NUNCA falla: produce
+//   1. Pollinations.ai (text.pollinations.ai) — proveedor principal, sin API key,
+//      sin límites. Rotación automática de modelos free. Si la cuota anónima se
+//      agota (402) o el endpoint está caído, se degrada sin romper.
+//   2. Ollama local — fallback gratuito, ilimitado y offline cuando está corriendo.
+//   3. Generador determinístico local — fallback garantizado que NUNCA falla: produce
 //      output válido respetando el esquema, usando las plantillas y pilares del repo.
-//      Así la app produce un short completo en cualquier entorno (incluso sin Ollama).
-//      Pollinations.text ya no se usa como proveedor de razonamiento porque su endpoint
-//      legado anónimo devuelve 402 (budget) y el anónimo GET no soporta prompts largos.
+//      Así la app produce un short completo en cualquier entorno (incluso sin Ollama
+//      ni Pollinations).
 //
 // Imágenes (storyboard): Pollinations.ai — sin API key, sin límites (model=flux).
 // Video: opcional vía Google Veo con GEMINI_API_KEY; sin clave, el render gratuito
 // con ffmpeg (ver video.server.ts) toma el relevo.
 
+const POLLINATIONS_TEXT = "https://text.pollinations.ai/";
 const POLLINATIONS_IMAGE = "https://image.pollinations.ai/prompt/";
 const OLLAMA_BASE = "http://localhost:11434/api/chat";
+
+// Rotación de modelos gratuitos de Pollinations (anónimo, sin clave, sin límites).
+const TEXT_MODELS = [
+  "gpt-4o-mini",
+  "claude-3-haiku",
+  "gemini-1.5-flash",
+  "llama-3.3-70b",
+  "mistral-nemo",
+];
 
 // Modelos locales preferidos (cualquiera es gratis e ilimitado con Ollama).
 const OLLAMA_MODELS = [
@@ -202,7 +213,53 @@ function pick<T>(arr: readonly T[], rng: () => number): T {
 }
 
 // ---------------------------------------------------------------------------
-// Proveedor 1: Ollama local (gratuito, ilimitado, sin claves).
+// Proveedor 1: Pollinations.ai (text.pollinations.ai) — principal, sin API key,
+// sin límites. Formato OpenAI-compatible; el 402/429 se degrada a los siguientes.
+// ---------------------------------------------------------------------------
+
+interface ChatResponse {
+  error?: { message?: string };
+  choices?: Array<{ message?: { content?: string } }>;
+}
+
+async function chatWithPollinations(
+  messages: OllamaMessage[],
+  maxTokens: number,
+  label: string,
+): Promise<string> {
+  // Rotación de modelos gratuitos para distribuir la carga anónima.
+  const model = TEXT_MODELS[(Math.random() * TEXT_MODELS.length) | 0]!;
+
+  const response = await fetchWithRetries(
+    POLLINATIONS_TEXT,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages,
+        temperature: 0.7,
+        max_tokens: maxTokens,
+        response_format: { type: "json_object" },
+      }),
+    },
+    { label: `${label}-pollinations` },
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`${label} [${response.status}]: ${body.slice(0, 400)}`);
+  }
+
+  const data = (await response.json()) as ChatResponse;
+  if (data.error?.message) throw new Error(`${label}: ${data.error.message}`);
+  const content = data.choices?.[0]?.message?.content;
+  if (!content?.trim()) throw new Error(`${label}: el modelo no devolvió contenido.`);
+  return content;
+}
+
+// ---------------------------------------------------------------------------
+// Proveedor 1b: Ollama local (gratuito, ilimitado, sin claves).
 // ---------------------------------------------------------------------------
 
 async function ollamaRunning(): Promise<boolean> {
@@ -285,7 +342,7 @@ async function chatWithOllama(
 }
 
 // ---------------------------------------------------------------------------
-// Proveedor 2: generador local determinístico (fallback garantizado, nunca falla).
+// Proveedor 3: generador local determinístico (fallback garantizado, nunca falla).
 // ---------------------------------------------------------------------------
 
 interface Fact {
@@ -783,9 +840,19 @@ function buildDeterministic(args: ReasonArgs): unknown {
 
 // ---------------------------------------------------------------------------
 // Razonamiento con salida JSON estructurada.
-//   Ollama local (gratuito, ilimitado, sin clave) → fallback determinístico (nunca falla).
-//   Valida la forma del JSON antes de devolverlo.
+//   Pollinations (principal, free) → Ollama local (fallback) → generador
+//   determinístico (garantizado, nunca falla). Valida la forma del JSON antes de
+//   devolverlo.
 // ---------------------------------------------------------------------------
+
+async function reasonFromPollinations(args: ReasonArgs, maxTokens: number): Promise<unknown> {
+  const messages = toMessages(
+    args.system,
+    `${args.prompt}\n\n${effortHint(args.effort ?? "medium")}`,
+  );
+  const content = await chatWithPollinations(messages, maxTokens, args.schemaName);
+  return parseJsonContent(content);
+}
 
 async function reasonFromOllama(args: ReasonArgs, maxTokens: number): Promise<unknown> {
   const messages = toMessages(
@@ -808,6 +875,7 @@ export async function reason<T>({
   const args = { system, prompt, schemaName, schema, effort };
 
   const intentos: Array<() => Promise<unknown>> = [
+    () => reasonFromPollinations(args, maxTokens),
     () => reasonFromOllama(args, maxTokens),
     () => Promise.resolve(buildDeterministic(args)),
   ];

@@ -1,3 +1,8 @@
+-- DEPRECATED — do not use como fuente de verdad. Esquema canónico: supabase/create_initial_tables.sql
+-- (que incluye video_job_id y la columna storyboard). Este archivo se conserva por historia
+-- y tiene un bug heredado: columna `video_url` duplicada. Se corrige aquí para que no rompa
+-- un CREATE manual, pero los despliegues deben aplicar create_initial_tables.sql.
+--
 -- Tabla principal 'runs'
 CREATE TABLE public.runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -19,7 +24,6 @@ CREATE TABLE public.runs (
   quality jsonb,
   quality_score numeric,
   approved boolean NOT NULL DEFAULT false,
-  video_url text,
   video_status text NOT NULL DEFAULT 'idle'
 );
 

@@ -26,7 +26,7 @@ export const DEFAULT_QUALITY_GATE: QualityGate = {
   minCta: 65,
   minAnyItem: 70,
   minRetention3s: 60,
-  maxRepeats: 0,
+  maxRepeats: 1,
   maxAvgCut: 3.5,
 };
 
