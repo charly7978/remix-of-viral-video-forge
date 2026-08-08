@@ -1,12 +1,7 @@
 // Clasificación de errores del proveedor de IA. Compartido cliente/servidor.
 
 export type ProviderErrorKind =
-  | "credits"
-  | "rate_limit"
-  | "missing_key"
-  | "unavailable"
-  | "timeout"
-  | "unknown";
+  "credits" | "rate_limit" | "missing_key" | "unavailable" | "timeout" | "unknown";
 
 export interface ProviderErrorInfo {
   kind: ProviderErrorKind;
@@ -45,10 +40,12 @@ export function classifyProviderError(raw: unknown): ProviderErrorInfo {
       kind: "credits",
       titulo: "Sin créditos de IA para generar el video",
       detalle:
-        "El proveedor rechazó la generación por falta de créditos o facturación. El dossier, el storyboard y el prompt maestro ya están listos: al recargar, se puede reintentar el render sin repetir el análisis.",
+        "El generador de video de Google (Veo) rechazó la generación por falta de facturación habilitada en la cuenta. El dossier, el storyboard y el prompt maestro ya están listos: al habilitar la facturación, se puede reintentar el render sin repetir el análisis.",
       acciones: [
-        { label: "Recargar créditos de Lovable", href: "https://lovable.dev/pricing" },
-        { label: "Habilitar facturación en Google AI Studio", href: "https://aistudio.google.com/apikey" },
+        {
+          label: "Habilitar facturación en Google AI Studio",
+          href: "https://aistudio.google.com/apikey",
+        },
         { label: "Reintentar generación", action: "reintentar" },
       ],
       reintentable: false,
@@ -59,13 +56,23 @@ export function classifyProviderError(raw: unknown): ProviderErrorInfo {
     return {
       kind: "rate_limit",
       titulo: "Límite de pedidos alcanzado",
-      detalle: "El proveedor limitó la cantidad de pedidos por minuto. Esperá unos minutos y reintentá.",
+      detalle:
+        "El proveedor limitó la cantidad de pedidos por minuto. Esperá unos minutos y reintentá.",
       acciones: [{ label: "Reintentar generación", action: "reintentar" }],
       reintentable: true,
     };
   }
 
-  if (has(lower, ["falta gemini_api_key", "falta ", "no hay gemini_api_key", "api key not valid", "401", "403"])) {
+  if (
+    has(lower, [
+      "falta gemini_api_key",
+      "falta ",
+      "no hay gemini_api_key",
+      "api key not valid",
+      "401",
+      "403",
+    ])
+  ) {
     return {
       kind: "missing_key",
       titulo: "Falta o no sirve la clave del proveedor de video",
@@ -94,7 +101,7 @@ export function classifyProviderError(raw: unknown): ProviderErrorInfo {
       titulo: "El modelo de video no está disponible",
       detalle: message,
       acciones: [
-        { label: "Ver planes y créditos", href: "https://lovable.dev/pricing" },
+        { label: "Verificar en Google AI Studio", href: "https://aistudio.google.com/apikey" },
         { label: "Reintentar generación", action: "reintentar" },
       ],
       reintentable: true,
