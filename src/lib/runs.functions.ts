@@ -74,13 +74,26 @@ export const getRun = createServerFn({ method: "POST" })
     return { run, candidates: candidates ?? [], frames, videoUrl };
   });
 
+const gateSchema = z
+  .object({
+    minTotal: z.number().min(0).max(100).optional(),
+    minHook: z.number().min(0).max(100).optional(),
+    minImpact: z.number().min(0).max(100).optional(),
+    minCta: z.number().min(0).max(100).optional(),
+    minAnyItem: z.number().min(0).max(100).optional(),
+    minRetention3s: z.number().min(0).max(100).optional(),
+    maxRepeats: z.number().min(0).max(20).optional(),
+    maxAvgCut: z.number().min(1).max(10).optional(),
+  })
+  .optional();
+
 export const startRun = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
-    z.object({ slot: z.enum(["viral", "general"]) }).parse(input),
+    z.object({ slot: z.enum(["viral", "general"]), gate: gateSchema }).parse(input),
   )
   .handler(async ({ data }) => {
     const { runProduction } = await import("./pipeline.server");
-    const id = await runProduction(data.slot, "manual");
+    const id = await runProduction(data.slot, "manual", data.gate);
     return { id };
   });
 
@@ -146,18 +159,30 @@ export const advanceVideo = createServerFn({ method: "POST" })
       }
 
       if (job.status === "failed" || job.status === "blocked") {
+        const { classifyProviderError } = await import("./ai-errors");
+        const info = classifyProviderError(job.error ?? "El render de video falló.");
         await supabaseAdmin
           .from("runs")
           .update({ video_status: job.status, error: job.error ?? "El render de video falló." })
           .eq("id", data.id);
-        return { status: job.status, progress: 0, message: job.error ?? "El render de video falló." };
+        return {
+          status: job.status,
+          progress: 0,
+          message: job.error ?? "El render de video falló.",
+          errorKind: info.kind,
+        };
       }
 
       return { status: "in_progress", progress: job.progress ?? 0 };
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Error de video";
-      await supabaseAdmin.from("runs").update({ video_status: "failed", error: message }).eq("id", data.id);
-      return { status: "failed", progress: 0, message };
+      const { classifyProviderError } = await import("./ai-errors");
+      const info = classifyProviderError(message);
+      await supabaseAdmin
+        .from("runs")
+        .update({ video_status: info.kind === "credits" ? "no_credits" : "failed", error: message })
+        .eq("id", data.id);
+      return { status: "failed", progress: 0, message, errorKind: info.kind };
     }
   });
 
