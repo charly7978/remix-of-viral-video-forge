@@ -4,6 +4,10 @@ import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { Activity, Flame, Play, Sparkles, Timer, TrendingUp } from "lucide-react";
 import { listRuns, startRun, type RunRow } from "@/lib/runs.functions";
+import { classifyProviderError } from "@/lib/ai-errors";
+import { DEFAULT_QUALITY_GATE, QUALITY_GATE_LABELS, type QualityGate } from "@/lib/quality-config";
+import { Slider } from "@/components/ui/slider";
+import { AlertTriangle, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 
@@ -67,14 +71,20 @@ function Dashboard() {
     refetchInterval: 15_000,
   });
 
+  const [gate, setGate] = useState<QualityGate>(DEFAULT_QUALITY_GATE);
+  const [fallo, setFallo] = useState<string | null>(null);
+
   const mutation = useMutation({
-    mutationFn: (slot: "viral" | "general") => trigger({ data: { slot } }),
+    mutationFn: (slot: "viral" | "general") => trigger({ data: { slot, gate } }),
     onSuccess: async () => {
+      setFallo(null);
       toast.success("Producción terminada");
       await queryClient.invalidateQueries({ queryKey: ["runs"] });
     },
     onError: (error: unknown) => {
-      toast.error(error instanceof Error ? error.message : "La corrida falló");
+      const message = error instanceof Error ? error.message : "La corrida falló";
+      setFallo(message);
+      toast.error(classifyProviderError(message).titulo);
     },
   });
 
@@ -119,6 +129,16 @@ function Dashboard() {
           value={runs[0]?.duration_ms ? `${Math.round(runs[0].duration_ms / 1000)} s` : "—"}
         />
       </section>
+
+      {fallo ? (
+        <ProviderAlert
+          raw={fallo}
+          reintentando={mutation.isPending}
+          onRetry={() => mutation.mutate(mutation.variables ?? "viral")}
+        />
+      ) : null}
+
+      <QualityGateCard gate={gate} onChange={setGate} />
 
       <section className="mt-8 grid gap-4 md:grid-cols-2">
         <LaunchCard
@@ -294,5 +314,102 @@ function RunRowCard({ run }: { run: RunRow }) {
         ) : null}
       </div>
     </Link>
+  );
+}
+
+/** Umbrales configurables del checklist: sin superarlos, el video no se genera. */
+function QualityGateCard({
+  gate,
+  onChange,
+}: {
+  gate: QualityGate;
+  onChange: (next: QualityGate) => void;
+}) {
+  const campos: Array<{ key: keyof QualityGate; max: number; step: number }> = [
+    { key: "minTotal", max: 100, step: 1 },
+    { key: "minHook", max: 100, step: 1 },
+    { key: "minImpact", max: 100, step: 1 },
+    { key: "minCta", max: 100, step: 1 },
+    { key: "minAnyItem", max: 100, step: 1 },
+    { key: "minRetention3s", max: 100, step: 1 },
+    { key: "maxRepeats", max: 10, step: 1 },
+    { key: "maxAvgCut", max: 6, step: 0.1 },
+  ];
+
+  return (
+    <section className="panel mt-8 p-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-bold">Reglas de aprobación del short</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            El video solo se genera y se publica si el checklist supera estos umbrales (gancho,
+            impacto, ritmo, repeticiones y CTA). Si no los pasa, el guion se reescribe y, si sigue
+            fallando, queda bloqueado.
+          </p>
+        </div>
+        <Button size="sm" variant="ghost" onClick={() => onChange(DEFAULT_QUALITY_GATE)}>
+          Restaurar valores
+        </Button>
+      </div>
+
+      <div className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        {campos.map(({ key, max, step }) => (
+          <div key={key}>
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="label-caps">{QUALITY_GATE_LABELS[key]}</p>
+              <span className="text-sm font-semibold">{gate[key]}</span>
+            </div>
+            <Slider
+              className="mt-3"
+              value={[gate[key]]}
+              min={key === "maxAvgCut" ? 1 : 0}
+              max={max}
+              step={step}
+              onValueChange={(value) => onChange({ ...gate, [key]: value[0] ?? gate[key] })}
+            />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** Alerta accionable ante error de créditos/cuota del proveedor de IA. */
+function ProviderAlert({
+  raw,
+  onRetry,
+  reintentando,
+}: {
+  raw: string;
+  onRetry: () => void;
+  reintentando: boolean;
+}) {
+  const info = classifyProviderError(raw);
+  return (
+    <div className="panel mt-8 border-destructive/50 p-5">
+      <div className="flex items-start gap-3">
+        <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" />
+        <div className="space-y-2">
+          <p className="font-semibold text-destructive">{info.titulo}</p>
+          <p className="text-sm text-muted-foreground">{info.detalle}</p>
+          <p className="text-xs text-muted-foreground/70">{raw}</p>
+          <div className="flex flex-wrap gap-2 pt-1">
+            {info.acciones.map((accion) =>
+              accion.href ? (
+                <Button key={accion.label} size="sm" variant="secondary" asChild>
+                  <a href={accion.href} target="_blank" rel="noreferrer">
+                    <ExternalLink className="size-3.5" /> {accion.label}
+                  </a>
+                </Button>
+              ) : (
+                <Button key={accion.label} size="sm" disabled={reintentando} onClick={onRetry}>
+                  {accion.label}
+                </Button>
+              ),
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
