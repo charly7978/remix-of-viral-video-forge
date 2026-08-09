@@ -71,19 +71,15 @@ async function renderClip(
   framePath: string,
   outPath: string,
   durSec: number,
-  zStart: number,
-  zEnd: number,
-  xExpr: string,
-  yExpr: string,
+  zVal: string,
+  cropX: string,
+  cropY: string,
 ): Promise<void> {
-  const nFrames = Math.max(2, Math.round(durSec * FPS));
-  const zExpr = `if(between(n\\,0\\,${nFrames - 1})\\,${zStart}+(${zEnd}-${zStart})*n/${nFrames - 1}\\,${zEnd})`;
-
   const vf =
     `scale=${W}:${H}:force_original_aspect_ratio=increase,` +
-    `crop=${W}:${H},` +
+    `crop=${W}:${H}:${cropX}:${cropY},` +
     `format=yuv420p,` +
-    `zoompan=z='${zExpr}':x='${xExpr}':y='${yExpr}':` +
+    `zoompan=z='${zVal}':x='0':y='0':` +
     `d=1:s=${W}x${H}:fps=${FPS},` +
     `scale=${W}:${H}`;
 
@@ -102,7 +98,7 @@ async function renderClip(
     "-pix_fmt",
     "yuv420p",
     "-preset",
-    "fast",
+    "ultrafast",
     "-crf",
     "18",
     "-r",
@@ -233,20 +229,18 @@ async function mixAudio(
   const assFilter =
     assPath && assPath.trim().length > 0 ? `[0:v]ass=subs.ass[vout]` : "[0:v]copy[vout]";
 
-  const vfComplex = `${assFilter};[vout][1:a]concat=n=1:v=1:a=1[outv][outa]`;
-  const vFilter = assPath ? vfComplex : undefined;
-
-  const finalOut = path.join(workDir, "final.mp4");
-
   const args: string[] = ["-y"];
   args.push("-i", mergedVideo);
   args.push("-i", normalizedAudio);
 
-  if (vFilter) {
-    args.push("-filter_complex", vFilter);
-    args.push("-map", "[outv]", "-map", "[outa]");
+  if (assPath && assPath.trim().length > 0) {
+    args.push("-filter_complex", "[0:v]ass=subs.ass[vout]");
+    args.push("-map", "[vout]", "-map", "1:a");
+  } else {
+    args.push("-map", "0:v", "-map", "1:a");
   }
 
+  const finalOut = path.join(workDir, "final.mp4");
   args.push(
     "-c:v",
     "libx264",
@@ -307,21 +301,19 @@ export async function assembleVideo(input: AssembleInput): Promise<Uint8Array> {
   const crossfadeDur = 0.6;
   const segDur = baseDur + crossfadeDur;
 
-  const zStart = 1.0;
-  const zEnd = 1.08;
-
-  const xExprs = ["(iw-iw*1.08)*n/(t*FPS)*0.5", "(iw*1.08-iw)*n/(t*FPS)*0.5"];
-  const yExprs = ["(ih-ih*1.08)*n/(t*FPS)*0.5", "(ih*1.08-ih)*n/(t*FPS)*0.5"];
+  const zVals = ["1.08", "1.0"];
+  const cropXs = ["-43", "0"];
+  const cropYs = ["-192", "0"];
 
   for (let i = 0; i < frameCount; i++) {
     const frame = input.frames[i]!;
     const out = path.join(work, `clip-${i}.mp4`);
-    const zS = zStart;
-    const zE = zEnd;
-    const xExpr = xExprs[i % xExprs.length]!;
-    const yExpr = yExprs[i % yExprs.length]!;
+    const idx = i % 2;
+    const zVal = zVals[idx]!;
+    const cropX = cropXs[idx]!;
+    const cropY = cropYs[idx]!;
 
-    await renderClip(frame.path, out, segDur, zS, zE, xExpr, yExpr);
+    await renderClip(frame.path, out, segDur, zVal, cropX, cropY);
     clips.push(out);
   }
 

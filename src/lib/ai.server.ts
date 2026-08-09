@@ -653,24 +653,6 @@ const PILAR_FACTS: Record<string, Fact[]> = {
 
 const PILLAR_ORDER = TOPIC_PILLARS.map((p) => p.id);
 
-interface QualityCheck {
-  puntajes: {
-    gancho: number;
-    impacto_emocional: number;
-    ritmo: number;
-    originalidad: number;
-    claridad: number;
-    sin_repeticiones: number;
-    cta: number;
-  };
-  puntaje_total: number;
-  veredicto: string;
-  problemas: Array<{ area: string; detalle: string; correccion: string }>;
-  prediccion_retencion_3s: number;
-  prediccion_retencion_final: number;
-  frases_repetidas: string[];
-}
-
 function fechaHoy(): string {
   return new Intl.DateTimeFormat("es-AR", {
     dateStyle: "full",
@@ -862,87 +844,6 @@ function buildDossier(args: ReasonArgs, rng: () => number): Record<string, unkno
       llamado_a_la_accion: "Compartí si te voló la cabeza.",
       riesgo_de_desmonetizacion: "Muy bajo; dato verificable sin lenguaje prohibido.",
     },
-    control_de_calidad: controlDeCalidad,
-  };
-}
-
-/**
- * QA determinístico HONESTO: calcula puntajes a partir del dossier real.
- * Da 90+ solo si el material realmente tiene gancho, ritmo, CTA y duración.
- */
-function buildQualityCheck(args: ReasonArgs): QualityCheck {
-  const rng = makeRng(seedFromPrompt(args.prompt));
-  const clamp = (value: number) => Math.min(100, Math.max(0, Math.round(value)));
-
-  // Intentamos extraer señales reales del dossier serializado en el prompt.
-  const raw = args.prompt;
-  const hasGuion = raw.includes('"guion"');
-  const hasPlanos = raw.includes('"planos"');
-  const ganchoTexto = /Gancho[:\s]*"?[^"\n]{0,200}/i.test(raw);
-  const tieneCta = /coment|rebobin|¿Cre|Coment|suscri/i.test(raw);
-  const sinSaludo = !/hola a todos|bienvenidos|hoy te voy a contar/i.test(raw);
-
-  const gancho = clamp(52 + rng() * 10 + (ganchoTexto ? 12 : 0) + (sinSaludo ? 10 : 0));
-  const impacto = clamp(50 + rng() * 8 + (ganchoTexto ? 10 : 0));
-  const ritmo = clamp(50 + rng() * 8 + (hasPlanos ? 14 : 0));
-  const originalidad = clamp(48 + rng() * 10);
-  const claridad = clamp(58 + rng() * 8 + (sinSaludo ? 8 : 0));
-  const repeticiones = clamp(70 + rng() * 10 + (hasGuion ? 6 : 0));
-  const cta = clamp(45 + rng() * 10 + (tieneCta ? 18 : 0));
-
-  const puntaje_total = Math.round(
-    gancho * 0.25 +
-      impacto * 0.25 +
-      ritmo * 0.15 +
-      originalidad * 0.1 +
-      claridad * 0.1 +
-      repeticiones * 0.1 +
-      cta * 0.05,
-  );
-
-  const problemas: Array<{ area: string; detalle: string; correccion: string }> = [];
-  if (gancho < 70)
-    problemas.push({
-      area: "gancho",
-      detalle: "El gancho no genera suficiente tensión inicial.",
-      correccion: "Abrir con una contradicción o dato imposible en los primeros 3 segundos.",
-    });
-  if (cta < 70)
-    problemas.push({
-      area: "cta",
-      detalle: "El cierre no empuja el comentario.",
-      correccion: "Terminar con una pregunta abierta o una afirmación discutible.",
-    });
-  if (ritmo < 70)
-    problemas.push({
-      area: "ritmo",
-      detalle: "El ritmo visual es lento.",
-      correccion: "Subir los cortes a 1,5-2,5 segundos y sacar planos muertos.",
-    });
-
-  const veredicto =
-    puntaje_total >= 80
-      ? "APROBADO — el short detiene el scroll y sostiene la atención."
-      : puntaje_total >= 70
-        ? "A PROBAR — necesita correcciones menores."
-        : "RECHAZADO — el material no está listo para publicar.";
-
-  return {
-    puntajes: {
-      gancho,
-      impacto_emocional: impacto,
-      ritmo,
-      originalidad,
-      claridad,
-      sin_repeticiones: repeticiones,
-      cta,
-    },
-    puntaje_total,
-    veredicto,
-    problemas,
-    prediccion_retencion_3s: clamp(40 + puntaje_total * 0.5),
-    prediccion_retencion_final: clamp(30 + puntaje_total * 0.35),
-    frases_repetidas: [],
   };
 }
 
@@ -953,8 +854,6 @@ function buildDeterministic(args: ReasonArgs): unknown {
       return buildSeleccion(args, rng);
     case "dossier":
       return buildDossier(args, rng);
-    case "control_de_calidad":
-      return buildQualityCheck(args);
     default:
       return { ok: true };
   }

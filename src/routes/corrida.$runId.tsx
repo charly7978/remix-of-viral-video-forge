@@ -5,7 +5,6 @@ import { useEffect } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, ArrowLeft, Copy, ExternalLink, Film, RefreshCw } from "lucide-react";
 import { classifyProviderError } from "@/lib/ai-errors";
-import { QUALITY_GATE_LABELS, type QualityGate } from "@/lib/quality-config";
 import { advanceVideo, getRun } from "@/lib/runs.functions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -55,7 +54,6 @@ function RunDetail() {
   const runData = dict(query.data?.run);
   const videoStatus = text(runData["video_status"]);
   const pendingVideo =
-    Boolean(runData["approved"]) &&
     !query.data?.videoUrl &&
     (videoStatus === "queued" || videoStatus === "in_progress");
 
@@ -95,10 +93,6 @@ function RunDetail() {
   const audio = dict(dossier["audio"]);
   const monetizacion = dict(dossier["monetizacion"]);
   const masterPrompt = text(run["master_prompt"]);
-  const calidad = dict(run["quality"]);
-  const puntajes = dict(calidad["puntajes"]);
-  const mecanica = dict(calidad["mecanica"]);
-  const aprobado = Boolean(run["approved"]);
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-10 md:px-8">
@@ -113,11 +107,6 @@ function RunDetail() {
           </Badge>
           {typeof run["viral_score"] === "number" ? (
             <span className="label-caps">Puntaje {Math.round(run["viral_score"])}/100</span>
-          ) : null}
-          {typeof run["quality_score"] === "number" ? (
-            <Badge variant={aprobado ? "default" : "destructive"}>
-              {aprobado ? "Aprobado" : "Rechazado"} · calidad {Math.round(run["quality_score"])}/100
-            </Badge>
           ) : null}
         </div>
         <h1 className="mt-3 text-3xl font-bold md:text-4xl">{text(run["topic"]) || "Sin tema"}</h1>
@@ -135,7 +124,6 @@ function RunDetail() {
       <Tabs defaultValue="video" className="mt-8">
         <TabsList className="flex-wrap">
           <TabsTrigger value="video">Video</TabsTrigger>
-          <TabsTrigger value="calidad">Calidad</TabsTrigger>
           <TabsTrigger value="guion">Guion</TabsTrigger>
           <TabsTrigger value="prompt">Prompt maestro</TabsTrigger>
           <TabsTrigger value="planos">Planos</TabsTrigger>
@@ -162,12 +150,7 @@ function RunDetail() {
               </Button>
             }
           >
-            {!aprobado ? (
-              <p className="text-sm text-destructive">
-                El control de calidad bloqueó este short, así que no se generó el video. Revisá la
-                pestaña Calidad y volvé a lanzar una corrida.
-              </p>
-            ) : query.data.videoUrl ? (
+            {query.data.videoUrl ? (
               <div className="space-y-3">
                 <video
                   src={query.data.videoUrl}
@@ -193,108 +176,7 @@ function RunDetail() {
           </Panel>
         </TabsContent>
 
-        <TabsContent value="calidad" className="space-y-4">
-          <Panel title="Checklist automático de calidad">
-            {Object.keys(puntajes).length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Esta corrida es anterior al checklist automático.
-              </p>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
-                {(
-                  [
-                    ["gancho", "Gancho (0-3s)"],
-                    ["impacto_emocional", "Impacto emocional"],
-                    ["ritmo", "Ritmo"],
-                    ["originalidad", "Originalidad"],
-                    ["claridad", "Claridad"],
-                    ["sin_repeticiones", "Guion sin repeticiones"],
-                    ["cta", "Llamado a la acción"],
-                  ] as const
-                ).map(([key, label]) => {
-                  const value = typeof puntajes[key] === "number" ? (puntajes[key] as number) : 0;
-                  return (
-                    <div key={key} className="rounded-md border border-border bg-secondary/40 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="label-caps">{label}</p>
-                        <span
-                          className={`font-display text-lg font-bold ${value >= 80 ? "text-primary" : "text-destructive"}`}
-                        >
-                          {Math.round(value)}
-                        </span>
-                      </div>
-                      <div className="mt-2 h-1.5 rounded-full bg-border">
-                        <div
-                          className={`h-1.5 rounded-full ${value >= 80 ? "bg-primary" : "bg-destructive"}`}
-                          style={{ width: `${Math.min(100, Math.max(0, value))}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Panel>
-
-          <Panel title="Diagnóstico">
-            <Field
-              label="Retención estimada a los 3s"
-              value={
-                typeof calidad["prediccion_retencion_3s"] === "number"
-                  ? `${Math.round(calidad["prediccion_retencion_3s"])}%`
-                  : ""
-              }
-            />
-            <Field
-              label="Retención estimada al final"
-              value={
-                typeof calidad["prediccion_retencion_final"] === "number"
-                  ? `${Math.round(calidad["prediccion_retencion_final"])}%`
-                  : ""
-              }
-            />
-            <Field
-              label="Estructura"
-              value={
-                Object.keys(mecanica).length > 0
-                  ? `${String(mecanica["duracion_total_seg"] ?? "?")}s · ${String(mecanica["cantidad_de_planos"] ?? "?")} planos · corte cada ${String(mecanica["corte_promedio_seg"] ?? "?")}s · CTA ${mecanica["tiene_cta"] ? "sí" : "no"}`
-                  : ""
-              }
-            />
-            <Field
-              label="Frases repetidas detectadas"
-              value={list(calidad["frases_repetidas"]).map(String).join(" | ")}
-            />
-            <Field label="Bloqueos" value={list(calidad["bloqueos"]).map(String).join("\n")} />
-            <Field label="Umbrales de aprobación aplicados" value={gateResumen(calidad["gate"])} />
-            <Field
-              label="Intentos de escritura"
-              value={String(dossier["intentos_de_calidad"] ?? "")}
-            />
-          </Panel>
-
-          {list(calidad["problemas"]).length > 0 ? (
-            <Panel title="Correcciones señaladas por el auditor">
-              <div className="space-y-3">
-                {list(calidad["problemas"]).map((raw, index) => {
-                  const problema = dict(raw);
-                  return (
-                    <div
-                      key={index}
-                      className="rounded-md border border-border bg-secondary/40 p-4"
-                    >
-                      <p className="label-caps">{text(problema["area"])}</p>
-                      <p className="mt-2 text-sm">{text(problema["detalle"])}</p>
-                      <p className="mt-2 text-sm text-primary">{text(problema["correccion"])}</p>
-                    </div>
-                  );
-                })}
-              </div>
-            </Panel>
-          ) : null}
-        </TabsContent>
-
-        <TabsContent value="guion" className="space-y-4">
+          <TabsContent value="guion" className="space-y-4">
           <Panel title="Gancho (0 a 3 segundos)">
             <Field label="Voz en off" value={text(hook["voz_en_off"])} />
             <Field label="Texto en pantalla" value={text(hook["texto_en_pantalla"])} />
@@ -514,16 +396,6 @@ function Field({ label, value, copyable }: { label: string; value: string; copya
       <p className="mt-1 whitespace-pre-wrap text-sm">{value}</p>
     </div>
   );
-}
-
-/** Resumen legible del gate configurable usado en la corrida. */
-function gateResumen(raw: unknown): string {
-  const gate = dict(raw) as Partial<QualityGate>;
-  const entries = Object.entries(gate).filter(([, value]) => typeof value === "number");
-  if (entries.length === 0) return "";
-  return entries
-    .map(([key, value]) => `${QUALITY_GATE_LABELS[key as keyof QualityGate] ?? key}: ${value}`)
-    .join("\n");
 }
 
 /** Alerta accionable para errores del proveedor (créditos agotados, cuota, clave). */

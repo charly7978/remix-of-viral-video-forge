@@ -75,29 +75,13 @@ export const getRun = createServerFn({ method: "POST" })
     return { run, candidates: candidates ?? [], frames, videoUrl };
   });
 
-const gateSchema = z
-  .object({
-    minTotal: z.number().min(0).max(100).optional(),
-    minHook: z.number().min(0).max(100).optional(),
-    minImpact: z.number().min(0).max(100).optional(),
-    minCta: z.number().min(0).max(100).optional(),
-    minAnyItem: z.number().min(0).max(100).optional(),
-    minRetention3s: z.number().min(0).max(100).optional(),
-    maxRepeats: z.number().min(0).max(20).optional(),
-    maxAvgCut: z.number().min(1).max(10).optional(),
-  })
-  .optional();
-
 export const startRun = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
-    z.object({ slot: z.enum(["viral", "general"]), gate: gateSchema }).parse(input),
+    z.object({ slot: z.enum(["viral", "general"]) }).parse(input),
   )
   .handler(async ({ data }) => {
     const { runProduction } = await import("./pipeline.server");
-    const gate = Object.fromEntries(
-      Object.entries(data.gate ?? {}).filter(([, value]) => typeof value === "number"),
-    ) as Record<string, number>;
-    const id = await runProduction(data.slot, "manual", gate);
+    const id = await runProduction(data.slot, "manual");
     return { id };
   });
 
@@ -115,7 +99,7 @@ export const advanceVideo = createServerFn({ method: "POST" })
     const { data: run, error } = await supabaseAdmin
       .from("runs")
       .select(
-        "id, approved, master_prompt, dossier, storyboard, video_job_id, video_status, video_url",
+        "id, master_prompt, dossier, storyboard, video_job_id, video_status, video_url",
       )
       .eq("id", data.id)
       .maybeSingle();
@@ -123,9 +107,6 @@ export const advanceVideo = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     if (!run) throw new Error("Corrida no encontrada");
     if (run.video_url && !data.retry) return { status: "completed", progress: 100 };
-    if (!run.approved) {
-      return { status: "blocked", progress: 0, message: "El short no pasó el control de calidad." };
-    }
 
     const { startVideoJob, getVideoJob, downloadVideo, assembleVideo } =
       await import("./video.server");

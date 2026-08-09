@@ -1,11 +1,9 @@
 // Orquestador de la producción de shorts virales permanentes. Solo servidor.
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { generateFrame, reason } from "./ai.server";
-import { evaluateQuality, type QualityCheck } from "./quality.server";
 import { startVideoJob } from "./video.server";
 import { asBriefing, sense, TRACTION_THRESHOLDS, type TrendItem } from "./trends.server";
 import { pickTemplate, templateBriefing, type ScriptTemplate } from "./script-templates";
-import type { QualityGate } from "./quality-config";
 
 export type Slot = "viral" | "general";
 
@@ -113,7 +111,6 @@ const dossierSchema = obj({
     llamado_a_la_accion: str,
     riesgo_de_desmonetizacion: str,
   }),
-  control_de_calidad: strArray,
 });
 
 export interface Seleccion {
@@ -262,43 +259,6 @@ Requisitos estructurales:
   (voz cálida + música con gancho + SFX por corte).
 - La descripción de YouTube y el caption de TikTok tienen que estar escritos para el algoritmo y para el
   humano al mismo tiempo, con las palabras clave del tema al principio.
-- control_de_calidad: la lista de verificaciones que este short ya cumple, punto por punto.`,
-  });
-}
-
-async function corregirDossier(
-  dossier: Record<string, unknown>,
-  calidad: QualityCheck,
-  template: ScriptTemplate,
-  semilla: number,
-): Promise<Record<string, unknown>> {
-  const fallas = [
-    ...(calidad.bloqueos ?? []),
-    ...(calidad.problemas ?? []).map((p) => `${p.area}: ${p.detalle} → ${p.correccion}`),
-  ];
-
-  return reason<Record<string, unknown>>({
-    system: ESTRATEGA,
-    schemaName: "dossier",
-    schema: dossierSchema,
-    effort: "high",
-    prompt: `El auditor de calidad rechazó este short. Reescribilo entero corrigiendo TODAS las fallas,
-sin perder lo que ya funcionaba y sin cambiar de tema.
-
-Fallas a corregir:
-${fallas.map((falla) => `- ${falla}`).join("\n")}
-
-${REGLAS_DE_IMPACTO}
-
-${templateBriefing(template, semilla)}
-
-Corregí especialmente el gancho (tiene que ser más brutal y más concreto), la curva de tensión, las
-repeticiones y el cierre. Mejorá la producción visual: cámara en movimiento constante, iluminación con
-carácter, paleta y grade coherentes, subtítulos animados integrados y audio nítido con música de gancho.
-Mantené el guion continuo sin huecos y entre 45 y 55 segundos, con 16 a 22 planos cinematográficos.
-
-Dossier rechazado:
-${JSON.stringify(dossier).slice(0, 40_000)}`,
   });
 }
 
@@ -333,7 +293,6 @@ async function renderStoryboard(
 export async function runProduction(
   slot: Slot,
   triggeredBy: string,
-  gateOverride?: Partial<QualityGate>,
 ): Promise<string> {
   const started = Date.now();
   const { data: created, error: createError } = await supabaseAdmin
@@ -370,15 +329,6 @@ export async function runProduction(
     const semilla = Math.floor(Math.random() * 1000);
 
     let dossier = await escribirDossier(slot, seleccion, template, semilla);
-    let calidad = await evaluateQuality(dossier, seleccion.tema, gateOverride);
-    let intentos = 1;
-
-    // Hasta dos pasadas de corrección si el checklist bloquea la aprobación.
-    while (!calidad.aprobado && intentos < 3) {
-      dossier = await corregirDossier(dossier, calidad, template, semilla);
-      calidad = await evaluateQuality(dossier, seleccion.tema, gateOverride);
-      intentos += 1;
-    }
 
     await supabaseAdmin.from("runs").update({ status: "rendering" }).eq("id", runId);
     const planos = (dossier["planos"] ?? []) as Array<{
@@ -389,11 +339,10 @@ export async function runProduction(
 
     const masterPrompt = String(dossier["prompt_maestro_video"] ?? "");
     let videoJobId: string | null = null;
-    let videoStatus = calidad.aprobado ? "queued" : "blocked";
+    let videoStatus: string = "queued";
     let videoError: string | null = null;
 
-    // El video solo se encola si el short pasó el control de calidad.
-    if (calidad.aprobado && masterPrompt) {
+    if (masterPrompt) {
       try {
         const job = await startVideoJob(videoPrompt(masterPrompt, dossier));
         videoJobId = job.id;
@@ -413,13 +362,9 @@ export async function runProduction(
           seleccion: { ...seleccion },
           plantilla: { id: template.id, nombre: template.nombre, semilla },
           avisos: warnings,
-          intentos_de_calidad: intentos,
         } as never,
         master_prompt: masterPrompt,
         storyboard,
-        quality: calidad as never,
-        quality_score: Math.round(calidad.puntaje_total ?? 0),
-        approved: Boolean(calidad.aprobado),
         video_job_id: videoJobId,
         video_status: videoStatus,
         error: videoError,
