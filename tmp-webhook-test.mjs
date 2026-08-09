@@ -9,7 +9,12 @@ if (!line) {
   process.exit(1);
 }
 
-const secret = line.split("=").slice(1).join("=").trim().replace(/^["']|["']$/g, "");
+const secret = line
+  .split("=")
+  .slice(1)
+  .join("=")
+  .trim()
+  .replace(/^["']|["']$/g, "");
 
 // Test 1: sin secreto → esperado 401
 try {

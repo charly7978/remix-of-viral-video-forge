@@ -22,13 +22,8 @@ const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const GEMINI_MODELS = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"];
 
 // Rotación de modelos gratuitos de Pollinations (anónimo, sin clave, sin límites).
-const TEXT_MODELS = [
-  "gpt-4o-mini",
-  "claude-3-haiku",
-  "gemini-1.5-flash",
-  "llama-3.3-70b",
-  "mistral-nemo",
-];
+// Solo openai-fast está disponible en tier anónimo (verificado 2026-08-09).
+const TEXT_MODELS = ["openai-fast"] as const;
 
 // Modelos locales preferidos (cualquiera es gratis e ilimitado con Ollama).
 const OLLAMA_MODELS = [
@@ -42,8 +37,8 @@ const OLLAMA_MODELS = [
 ];
 
 // Tamaño del storyboard en píxeles (vertical 9:16, liviano para descargar rápido).
-const FRAME_WIDTH = 540;
-const FRAME_HEIGHT = 960;
+const FRAME_WIDTH = 1080;
+const FRAME_HEIGHT = 1920;
 
 // ---------------------------------------------------------------------------
 // Utilidades de red: timeout + retries con backoff exponencial.
@@ -313,9 +308,7 @@ async function chatWithGemini(
         lastError = new Error(`${label}: ${data.error.message}`);
         continue;
       }
-      const content = data.candidates?.[0]?.content?.parts
-        ?.map((part) => part.text ?? "")
-        .join("");
+      const content = data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("");
       if (!content?.trim()) {
         lastError = new Error(`${label}: el modelo no devolvió contenido.`);
         continue;
@@ -897,12 +890,35 @@ function buildQualityCheck(args: ReasonArgs): QualityCheck {
   const repeticiones = clamp(70 + rng() * 10 + (hasGuion ? 6 : 0));
   const cta = clamp(45 + rng() * 10 + (tieneCta ? 18 : 0));
 
-  const puntaje_total = Math.round(gancho * 0.25 + impacto * 0.25 + ritmo * 0.15 + originalidad * 0.1 + claridad * 0.1 + repeticiones * 0.1 + cta * 0.05);
+  const puntaje_total = Math.round(
+    gancho * 0.25 +
+      impacto * 0.25 +
+      ritmo * 0.15 +
+      originalidad * 0.1 +
+      claridad * 0.1 +
+      repeticiones * 0.1 +
+      cta * 0.05,
+  );
 
   const problemas: Array<{ area: string; detalle: string; correccion: string }> = [];
-  if (gancho < 70) problemas.push({ area: "gancho", detalle: "El gancho no genera suficiente tensión inicial.", correccion: "Abrir con una contradicción o dato imposible en los primeros 3 segundos." });
-  if (cta < 70) problemas.push({ area: "cta", detalle: "El cierre no empuja el comentario.", correccion: "Terminar con una pregunta abierta o una afirmación discutible." });
-  if (ritmo < 70) problemas.push({ area: "ritmo", detalle: "El ritmo visual es lento.", correccion: "Subir los cortes a 1,5-2,5 segundos y sacar planos muertos." });
+  if (gancho < 70)
+    problemas.push({
+      area: "gancho",
+      detalle: "El gancho no genera suficiente tensión inicial.",
+      correccion: "Abrir con una contradicción o dato imposible en los primeros 3 segundos.",
+    });
+  if (cta < 70)
+    problemas.push({
+      area: "cta",
+      detalle: "El cierre no empuja el comentario.",
+      correccion: "Terminar con una pregunta abierta o una afirmación discutible.",
+    });
+  if (ritmo < 70)
+    problemas.push({
+      area: "ritmo",
+      detalle: "El ritmo visual es lento.",
+      correccion: "Subir los cortes a 1,5-2,5 segundos y sacar planos muertos.",
+    });
 
   const veredicto =
     puntaje_total >= 80
@@ -1020,14 +1036,15 @@ export async function reason<T>({
 
 // ---------------------------------------------------------------------------
 // Generación de imágenes (Pollinations, sin API key, sin límites).
-//   Se usa model=flux y se evita enhance=true: el paso de "enhance" de Pollinations
-//   internamente procesa un archivo image.png con un modelo sin soporte de imágenes,
-//   produciendo exactamente el error: "Cannot read image.png (this model does not support image input)."
+//   Pollinations detecta automáticamente el formato vertical por el prompt;
+//   no se especifica model= porque el modelo por defecto responde mejor a
+//   descripciones cinematográficas (evitar enhance=true: consume tokens y
+//   produce errores en modelos sin soporte de imagen de entrada).
 // ---------------------------------------------------------------------------
 
 export async function generateFrame(prompt: string): Promise<Uint8Array | null> {
   const full = `${prompt}. Vertical 9:16 short-form video frame, cinematic, high contrast, no watermark, no text, professional lighting, shallow depth of field, 8k quality`;
-  const url = `${POLLINATIONS_IMAGE}${encodeURIComponent(full)}?width=${FRAME_WIDTH}&height=${FRAME_HEIGHT}&nologo=true&model=flux`;
+  const url = `${POLLINATIONS_IMAGE}${encodeURIComponent(full)}?width=${FRAME_WIDTH}&height=${FRAME_HEIGHT}&nologo=true`;
 
   try {
     const response = await fetchWithRetries(

@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { buildAssFromGuion } from "./captions.server";
 
 export interface RunRow {
   id: string;
@@ -187,12 +188,11 @@ export const advanceVideo = createServerFn({ method: "POST" })
             ? Math.max(...guion.map((g) => Number(g.hasta_seg) || 0))
             : frames.length * 3;
 
-        // Descargar frames desde Supabase al tmp local para que ffmpeg los lea.
         const { promises: fsp } = await import("node:fs");
         const { tmpdir } = await import("node:os");
         const nodePath = await import("node:path");
         const tmp = await fsp.mkdtemp(nodePath.join(tmpdir(), "vframes-"));
-        const localFrames = [];
+        const localFrames: Array<{ numero: number; path: string }> = [];
         for (const f of frames) {
           const { data: signed } = await supabaseAdmin.storage
             .from("storyboards")
@@ -211,12 +211,20 @@ export const advanceVideo = createServerFn({ method: "POST" })
           voiceover,
           durationSec,
           runId: data.id,
-          beats: guion.map((g) => ({
-            desde_seg: Number(g.desde_seg) || 0,
-            hasta_seg: Number(g.hasta_seg) || 0,
-            texto_en_pantalla: (g.texto_en_pantalla || g.voz_en_off || "").trim(),
-          })),
         };
+
+        try {
+          const assContent = await buildAssFromGuion(guion);
+          const { promises: fsp } = await import("node:fs");
+          const { tmpdir } = await import("node:os");
+          const nodePath = await import("node:path");
+          const tmp = await fsp.mkdtemp(nodePath.join(tmpdir(), "vframes-"));
+          const assPath = nodePath.join(tmp, "subs.ass");
+          await fsp.writeFile(assPath, assContent, "utf-8");
+          assembleArgs.subtitles = assPath;
+        } catch (assErr) {
+          console.warn(`[runs] No se pudieron generar subtítulos ASS: ${assErr}`);
+        }
 
         const bytes = await assembleVideo(assembleArgs);
 
@@ -225,7 +233,6 @@ export const advanceVideo = createServerFn({ method: "POST" })
           .from("videos")
           .upload(videoPath, bytes, { contentType: "video/mp4", upsert: true });
         if (uploadError) throw new Error(uploadError.message);
-        await fsp.rm(tmp, { recursive: true, force: true });
 
         await supabaseAdmin
           .from("runs")

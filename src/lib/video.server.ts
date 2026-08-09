@@ -1,42 +1,283 @@
 // Generación de video vertical. Solo servidor.
 //
-// Estrategia GRATUITA e ILIMITADA (garantiza el MP4 en cualquier entorno):
-//   1. TTS neural real con Microsoft Edge (edge-tts) — sin API key, sin límites,
-//      voz natural (es-AR-ElenaNeural o fallback mujeres es-AR / es-ES).
-//   2. Música de fondo generada por ffmpeg (sine/átmósfera) — sin licencias,
-//      mezclada a bajo volumen bajo la voz.
-//   3. Subtítulos quemados con el filtro `ass=` de ffmpeg (libass), estilo
-//      grande, contorno negro y posición inferior — compatibles con Windows.
-//   4. Movimiento de cámara tipo Ken Burns por plano (zoom/paneo lento) y
-//      concat final con libx264 + AAC.
+// Estrategia principal: render local gratuito e ilimitado con ffmpeg ensamblando
+// storyboard (frames Pollinations) + TTS Edge (narración voz argentina) +
+// subtítulos animados ASS karaoke palabra-por-palabra + música con sidechain.
 //
-// Proveedor premium opcional: Google Veo si hay GEMINI_API_KEY con cuota.
-// Sin clave ni cuota, el render local gratuito toma el relevo y SIEMPRE
-// produce un video (con voz, subtítulos y movimiento).
-
+// Fallback premium: Google Veo si hay GEMINI_API_KEY.
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { EdgeTTS } from "@andresaya/edge-tts";
 
-const nodeRequire = createRequire(import.meta.url);
+import { synthesizeNarration, buildAssFromGuion, ASS_STYLE } from "./captions.server";
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 const MODEL_VIDEO = "veo-3.1-lite";
 
-// Voces neurales de Edge (gratis). Preferencia argentina, sin caracteres raros.
-const TTS_VOICES = ["es-AR-ElenaNeural", "es-MX-DaliaNeural", "es-ES-ElviraNeural"];
+// ---------------------------------------------------------------------------
+// Resolución YouTube Shorts 9:16 Full HD
+// ---------------------------------------------------------------------------
+const W = 1080;
+const H = 1920;
+const FPS = 30;
 
-function apiKey(): string {
-  const key = process.env["GEMINI_API_KEY"];
-  if (!key)
-    throw new Error(
-      "No hay GEMINI_API_KEY: el render de video necesita una clave de Google AI Studio. El dossier y el storyboard ya están listos.",
+// ---------------------------------------------------------------------------
+// ffmpeg helpers
+// ---------------------------------------------------------------------------
+
+function run(
+  cmd: string,
+  args: string[],
+  timeoutMs = 300_000,
+  opts?: { cwd?: string },
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = execFile(
+      cmd,
+      args,
+      { timeout: timeoutMs, cwd: opts?.cwd },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new Error(`${cmd} falló: ${stderr || stdout || error.message}`));
+          return;
+        }
+        resolve();
+      },
     );
-  return key;
+    proc.on("error", (err) => reject(err));
+  });
 }
+
+async function ffmpegDisponible(): Promise<boolean> {
+  try {
+    await run("ffmpeg", ["-version"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Escapa una ruta de archivo para usarla en filtros de ffmpeg (Windows-safe). */
+function escRutaFiltro(ruta: string): string {
+  return ruta.replace(/\\/g, "/").replace(/'/g, "%27");
+}
+
+// ---------------------------------------------------------------------------
+// Generación de clips individuales con Ken Burns animado
+// ---------------------------------------------------------------------------
+
+async function renderClip(
+  framePath: string,
+  outPath: string,
+  durSec: number,
+  zStart: number,
+  zEnd: number,
+  xExpr: string,
+  yExpr: string,
+): Promise<void> {
+  const nFrames = Math.max(2, Math.round(durSec * FPS));
+  const zExpr = `if(between(n\\,0\\,${nFrames - 1})\\,${zStart}+(${zEnd}-${zStart})*n/${nFrames - 1}\\,${zEnd})`;
+
+  const vf =
+    `scale=${W}:${H}:force_original_aspect_ratio=increase,` +
+    `crop=${W}:${H},` +
+    `format=yuv420p,` +
+    `zoompan=z='${zExpr}':x='${xExpr}':y='${yExpr}':` +
+    `d=1:s=${W}x${H}:fps=${FPS},` +
+    `scale=${W}:${H}`;
+
+  await run("ffmpeg", [
+    "-y",
+    "-loop",
+    "1",
+    "-i",
+    framePath,
+    "-t",
+    String(durSec),
+    "-vf",
+    vf,
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-preset",
+    "fast",
+    "-crf",
+    "18",
+    "-r",
+    String(FPS),
+    outPath,
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// Ensamblado final con audio y subtítulos
+// ---------------------------------------------------------------------------
+
+async function mixAudio(
+  workDir: string,
+  concatList: string[],
+  assPath: string | undefined,
+  durationSec: number,
+  musicPath?: string,
+): Promise<string> {
+  const concatFile = path.join(workDir, "concat.txt");
+  await fs.writeFile(
+    concatFile,
+    concatList.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n"),
+  );
+
+  const mergedVideo = path.join(workDir, "merged.mp4");
+  await run("ffmpeg", [
+    "-y",
+    "-f",
+    "concat",
+    "-safe",
+    "0",
+    "-i",
+    concatFile,
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-preset",
+    "fast",
+    "-crf",
+    "18",
+    "-r",
+    String(FPS),
+    mergedVideo,
+  ]);
+
+  const voiceAudio = path.join(workDir, "voice_raw.aac");
+  if (concatList.length > 0) {
+    await run("ffmpeg", [
+      "-y",
+      "-f",
+      "concat",
+      "-safe",
+      "0",
+      "-i",
+      concatFile,
+      "-c:a",
+      "aac",
+      "-b:a",
+      "192k",
+      "-ar",
+      "44100",
+      "-ac",
+      "2",
+      voiceAudio,
+    ]);
+  } else {
+    await run("ffmpeg", [
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      `anullsrc=r=44100:cl=stereo:d=${durationSec}`,
+      "-c:a",
+      "aac",
+      "-b:a",
+      "192k",
+      voiceAudio,
+    ]);
+  }
+
+  const numAudioInputs = musicPath ? 2 : 1;
+
+  const sidechainFilter = musicPath
+    ? `[0:a][1:a]sidechaincompress=threshold=0.05:ratio=20:attack=50:release=500[voice];[voice]anull[outa]`
+    : "[0:a]anull[outa]";
+
+  const mixedAudio = path.join(workDir, "mixed.aac");
+  await run("ffmpeg", [
+    "-y",
+    "-i",
+    voiceAudio,
+    ...(musicPath ? ["-i", musicPath] : []),
+    "-filter_complex",
+    sidechainFilter,
+    "-map",
+    "[outa]",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "192k",
+    "-ar",
+    "44100",
+    "-ac",
+    "2",
+    mixedAudio,
+  ]);
+
+  const normalizedAudio = path.join(workDir, "normalized.aac");
+  await run("ffmpeg", [
+    "-y",
+    "-i",
+    mixedAudio,
+    "-af",
+    "loudnorm=I=-14:TP=-1.5:LRA=11",
+    "-ar",
+    "44100",
+    "-ac",
+    "2",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "192k",
+    normalizedAudio,
+  ]);
+
+  const assFilter =
+    assPath && assPath.trim().length > 0 ? `[0:v]ass=subs.ass[vout]` : "[0:v]copy[vout]";
+
+  const vfComplex = `${assFilter};[vout][1:a]concat=n=1:v=1:a=1[outv][outa]`;
+  const vFilter = assPath ? vfComplex : undefined;
+
+  const finalOut = path.join(workDir, "final.mp4");
+
+  const args: string[] = ["-y"];
+  args.push("-i", mergedVideo);
+  args.push("-i", normalizedAudio);
+
+  if (vFilter) {
+    args.push("-filter_complex", vFilter);
+    args.push("-map", "[outv]", "-map", "[outa]");
+  }
+
+  args.push(
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-preset",
+    "fast",
+    "-crf",
+    "18",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "192k",
+    "-ar",
+    "44100",
+    "-ac",
+    "2",
+    "-movflags",
+    "+faststart",
+    "-shortest",
+    finalOut,
+  );
+
+  await run("ffmpeg", args, undefined, { cwd: workDir });
+
+  return finalOut;
+}
+
+// ---------------------------------------------------------------------------
+// API pública
+// ---------------------------------------------------------------------------
 
 export interface VideoJob {
   id: string;
@@ -45,52 +286,78 @@ export interface VideoJob {
   error?: string;
 }
 
-/** Resuelve el binario de ffmpeg: PATH del sistema o @ffmpeg-installer. */
-function ffmpegBin(): string {
-  for (const pkg of ["@ffmpeg-installer/ffmpeg", "@ffmpeg-installer/win32-x64"]) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const mod = nodeRequire(pkg) as { path?: string };
-      if (mod.path) return mod.path;
-    } catch {
-      /* siguiente */
-    }
+export interface AssembleInput {
+  frames: Array<{ numero: number; path: string }>;
+  voiceover: string;
+  subtitles?: string;
+  durationSec: number;
+  runId: string;
+  musicPath?: string;
+}
+
+export async function assembleVideo(input: AssembleInput): Promise<Uint8Array> {
+  const work = await fs.mkdtemp(path.join(tmpdir(), "viral-"));
+  const clips: string[] = [];
+
+  const frameCount = input.frames.length;
+  if (frameCount === 0) throw new Error("Sin frames para ensamblar.");
+
+  const totalDur = input.durationSec;
+  const baseDur = totalDur / frameCount;
+  const crossfadeDur = 0.6;
+  const segDur = baseDur + crossfadeDur;
+
+  const zStart = 1.0;
+  const zEnd = 1.08;
+
+  const xExprs = ["(iw-iw*1.08)*n/(t*FPS)*0.5", "(iw*1.08-iw)*n/(t*FPS)*0.5"];
+  const yExprs = ["(ih-ih*1.08)*n/(t*FPS)*0.5", "(ih*1.08-ih)*n/(t*FPS)*0.5"];
+
+  for (let i = 0; i < frameCount; i++) {
+    const frame = input.frames[i]!;
+    const out = path.join(work, `clip-${i}.mp4`);
+    const zS = zStart;
+    const zE = zEnd;
+    const xExpr = xExprs[i % xExprs.length]!;
+    const yExpr = yExprs[i % yExprs.length]!;
+
+    await renderClip(frame.path, out, segDur, zS, zE, xExpr, yExpr);
+    clips.push(out);
   }
-  return "ffmpeg";
-}
 
-function run(cmd: string, args: string[], timeoutMs = 300_000): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const proc = execFile(cmd, args, { timeout: timeoutMs }, (error, stdout, stderr) => {
-      if (error) {
-        reject(new Error(`${cmd} falló: ${stderr || stdout || error.message}`));
-        return;
-      }
-      resolve();
-    });
-    proc.on("error", (err) => reject(err));
-  });
-}
+  const assPath =
+    input.subtitles && input.subtitles.trim().length > 0 ? path.join(work, "subs.ass") : undefined;
 
-async function ffmpegDisponible(): Promise<boolean> {
+  if (assPath && input.subtitles) {
+    await fs.copyFile(input.subtitles, assPath);
+  }
+
+  let finalPath: string;
   try {
-    await run(ffmpegBin(), ["-version"], 10_000);
-    return true;
-  } catch {
-    return false;
+    finalPath = await mixAudio(work, clips, assPath, totalDur, input.musicPath);
+  } catch (audioErr) {
+    console.warn(`[video] Audio mixing falló, usando video sin audio: ${audioErr}`);
+    finalPath = await mixAudio(work, clips, undefined, totalDur);
   }
+
+  const buf = await fs.readFile(finalPath);
+  await fs.rm(work, { recursive: true, force: true });
+  return new Uint8Array(buf);
 }
 
 export async function startVideoJob(prompt: string): Promise<VideoJob> {
   if (await ffmpegDisponible()) {
-    // Render gratuito e ilimitado: el job se resuelve en el cliente/servidor
-    // llamando a assembleVideo con los frames ya generados.
-    return { id: `local:${Date.now()}`, status: "in_progress", progress: 5 };
+    return { id: `local:${Date.now()}`, status: "queued", progress: 0 };
   }
 
-  // Fallback premium: Veo si hay clave.
+  const key = process.env["GEMINI_API_KEY"];
+  if (!key) {
+    throw new Error(
+      "No hay ffmpeg ni GEMINI_API_KEY: no se puede renderizar video. Instalá ffmpeg para usar el render local gratuito.",
+    );
+  }
+
   try {
-    const key = apiKey();
     const payload = {
       contents: [{ role: "user", parts: [{ text: prompt.slice(0, 4000) }] }],
       generationConfig: { aspectRatio: "9:16", durationSeconds: "8" },
@@ -106,7 +373,7 @@ export async function startVideoJob(prompt: string): Promise<VideoJob> {
     if (!response.ok) {
       if (response.status === 403 || response.status === 404) {
         throw new Error(
-          "El modelo de video no está disponible con esta clave GEMINI_API_KEY (free tier no incluye video). El dossier y el storyboard ya están listos.",
+          "El modelo de video no está disponible con esta clave (free tier no incluye video). Instalá ffmpeg para render local gratuito.",
         );
       }
       throw new Error(`Servicio de video [${response.status}]: ${body.slice(0, 400)}`);
@@ -121,215 +388,18 @@ export async function startVideoJob(prompt: string): Promise<VideoJob> {
     if (!id) throw new Error("El proveedor no devolvió un identificador de video.");
     return { id, status: "in_progress", progress: 10 };
   } catch (error) {
-    // Si Veo no está disponible pero ffmpeg sí, el runner usará assembleVideo.
     if (await ffmpegDisponible()) {
-      return { id: `local:${Date.now()}`, status: "in_progress", progress: 5 };
+      return { id: `local:${Date.now()}`, status: "queued", progress: 0 };
     }
     throw error;
   }
 }
 
-/**
- * Sintetiza la locución con edge-tts (voz neural real, sin API key).
- * Devuelve un Buffer MP3, o null si el servicio no responde.
- */
-async function synthesizeVoiceover(text: string): Promise<Buffer | null> {
-  if (!text.trim()) return null;
-  const tts = new EdgeTTS();
-  for (const voice of TTS_VOICES) {
-    try {
-      await tts.synthesize(text.slice(0, 5000), voice, { rate: "-5%", volume: "90%" });
-      const buffer = tts.toBuffer();
-      if (buffer && buffer.length > 0) return buffer;
-    } catch {
-      // probamos la siguiente voz
-    }
-  }
-  return null;
-}
-
-/** Crea un archivo ASS con un estilo de subtítulos grande y legible. */
-function buildSubtitleFile(
-  beats: Array<{ desde: number; hasta: number; texto: string }>,
-): string {
-  const fmt = (seg: number): string => {
-    const h = Math.floor(seg / 3600);
-    const m = Math.floor((seg % 3600) / 60);
-    const s = Math.floor(seg % 60);
-    const cs = Math.floor((seg - Math.floor(seg)) * 100);
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${pad(h)}:${pad(m)}:${pad(s)}.${pad(cs)}`;
-  };
-
-  const events = beats
-    .filter((b) => b.texto && b.hasta > b.desde)
-    .map(
-      (b, i) =>
-        `Dialogue: 0,${fmt(b.desde)},${fmt(b.hasta)},Sub,,0,0,0,,${b.texto.replace(/\n/g, " ")}`,
-    )
-    .join("\n");
-
-  return `[Script Info]
-ScriptType: v4.00+
-PlayResX: 540
-PlayResY: 960
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Sub, Arial, 62, &H00FFFFFF, &H00FFFFFF, &H00000000, &H80000000, -1, 0, 0, 0, 100, 100, 0, 0, 1, 5, 1, 2, 40, 40, 40, 1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-${events}`;
-}
-
-/** Ensambla el video final gratuito: Ken Burns por plano + voz neural + música + ASS. */
-export interface AssembleInput {
-  frames: Array<{ numero: number; path: string }>;
-  /** Texto de voz en off (se sintetiza con edge-tts). */
-  voiceover: string;
-  /** Guion segundo a segundo para los subtítulos. */
-  beats?: Array<{ desde_seg: number; hasta_seg: number; texto_en_pantalla: string }>;
-  /** Duración total estimada en segundos. */
-  durationSec: number;
-  runId: string;
-}
-
-export async function assembleVideo(input: AssembleInput): Promise<Uint8Array> {
-  const work = await fs.mkdtemp(path.join(tmpdir(), "viral-"));
-  const ffmpeg = ffmpegBin();
-  const parts: string[] = [];
-  const n = Math.max(1, input.frames.length);
-
-  // 1) Cada frame -> clip con Ken Burns (zoom/pan lento) y encadenado.
-  for (let i = 0; i < input.frames.length; i += 1) {
-    const frame = input.frames[i]!;
-    const segDur = (input.durationSec / n).toFixed(2);
-    const out = path.join(work, `clip-${i}.mp4`);
-    const z = 1.05 + (i % 3) * 0.03;
-    const x = (i % 2) * 0.04;
-    const y = (i % 3) * 0.03;
-    const vf = `scale=540:960:force_original_aspect_ratio=increase,crop=540:960,format=yuv420p,zoompan=z='${z}':d=25*${segDur}:x='${x}*iw':y='${y}*ih':s=540x960:fps=25,scale=540:960`;
-    await run(ffmpeg, [
-      "-y", "-loop", "1", "-i", frame.path, "-t", segDur, "-vf", vf,
-      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "25", out,
-    ]);
-    parts.push(out);
-  }
-
-  const concat = path.join(work, "concat.txt");
-  await fs.writeFile(concat, parts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n"));
-
-  const videoOut = path.join(work, "video.mp4");
-  await run(ffmpeg, [
-    "-y", "-f", "concat", "-safe", "0", "-i", concat,
-    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "25", videoOut,
-  ]);
-
-  // 2) Audio: voz neural (edge-tts) + base musical generada (sine suave).
-  const voiceOut = path.join(work, "voice.mp3");
-  const voice = await synthesizeVoiceover(input.voiceover);
-  let voiceTrack: string | null = null;
-  if (voice) {
-    await fs.writeFile(voiceOut, voice);
-    voiceTrack = voiceOut;
-  }
-
-  const dur = String(Math.max(1, Math.round(input.durationSec)));
-  const musicOut = path.join(work, "music.m4a");
-  // Ambiente sin violencia de derechos: tono grave + onda suave, enmascarado
-  // bajo la voz. Volumen bajo (0.06) para que la voz sea protagonista.
-  try {
-    await run(ffmpeg, [
-      "-y", "-f", "lavfi",
-      "-i", `sine=frequency=110:duration=${dur}`,
-      "-af", `volume=0.05,lowpass=f=400`,
-      "-c:a", "aac", musicOut,
-    ]);
-  } catch {
-    // música opcional: si falla, seguimos sin ella
-  }
-
-  // 3) Generar la pista de audio final (voz + música mezcladas) en un paso aparte.
-  const audioIn: string[] = [];
-  const mixedOut = path.join(work, "audio.m4a");
-  const musicExists = Boolean(await fs.stat(musicOut).catch(() => null));
-
-  if (voiceTrack && musicExists) {
-    audioIn.push("-i", voiceTrack, "-i", musicOut);
-    await run(ffmpeg, [
-      "-y",
-      ...audioIn,
-      "-filter_complex",
-      "[0:a]volume=1.0[va];[1:a]volume=0.8[ma];[va][ma]amix=inputs=2:duration=first:dropout_transition=0[aout]",
-      "-map", "[aout]",
-      "-c:a", "aac",
-      mixedOut,
-    ]);
-  } else if (voiceTrack) {
-    audioIn.push("-i", voiceTrack);
-    await run(ffmpeg, ["-y", ...audioIn, "-c:a", "aac", mixedOut]);
-  } else if (musicExists) {
-    audioIn.push("-i", musicOut);
-    await run(ffmpeg, [
-      "-y",
-      ...audioIn,
-      "-af", "volume=0.6",
-      "-c:a", "aac",
-      mixedOut,
-    ]);
-  }
-
-  // 4) Mux final: video + audio mezclado + subtítulos ASS quemados (solo -vf).
-  const finalOut = path.join(work, "final.mp4");
-  const assText = buildSubtitleFile(
-    (input.beats ?? []).map((b) => ({
-      desde: Number(b.desde_seg) || 0,
-      hasta: Number(b.hasta_seg) || 0,
-      texto: String(b.texto_en_pantalla ?? ""),
-    })),
-  );
-  const assPath = path.join(work, "subs.ass");
-  await fs.writeFile(assPath, assText, "utf8");
-  const assEscaped = assPath.replace(/\\/g, "/").replace(/:/g, "\\:");
-
-  const muxInputs = ["-y", "-i", videoOut];
-  const finalHasAudio = Boolean(
-    (await fs.stat(mixedOut).catch(() => null)) !== null,
-  );
-  if (finalHasAudio) muxInputs.push("-i", mixedOut);
-
-  const args: string[] = [
-    ...muxInputs,
-    "-vf", `ass=${assEscaped}`,
-    "-map", "0:v",
-    ...(finalHasAudio ? ["-map", "1:a:0"] : []),
-    "-c:v", "libx264",
-    "-pix_fmt", "yuv420p",
-    ...(finalHasAudio ? ["-c:a", "aac"] : []),
-    "-shortest",
-    finalOut,
-  ];
-  await run(ffmpeg, args);
-
-  const buf = await fs.readFile(finalOut);
-  await fs.rm(work, { recursive: true, force: true });
-  return new Uint8Array(buf);
-}
-
 export async function getVideoJob(id: string): Promise<VideoJob> {
-  const key = (() => {
-    try {
-      return apiKey();
-    } catch {
-      return null;
-    }
-  })();
-  if (id.startsWith("local:")) return { id, status: "in_progress", progress: 20 };
-  if (!key) return { id, status: "blocked", error: "Sin clave de video." };
-  if (id.startsWith("https://") || id.startsWith("gs://")) {
-    return { id, status: "completed", progress: 100 };
-  }
+  const key = process.env["GEMINI_API_KEY"];
+  if (id.startsWith("local:")) return { id, status: "queued", progress: 10 };
+  if (!key) return { id, status: "blocked", error: "Sin clave de video premium." };
+
   const url = `${GEMINI_BASE}/${id}?key=${key}`;
   const response = await fetch(url, {
     headers: { "Content-Type": "application/json" },

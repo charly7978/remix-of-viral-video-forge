@@ -9,7 +9,12 @@ if (!line) {
   process.exit(1);
 }
 
-const key = line.split("=").slice(1).join("=").trim().replace(/^["']|["']$/g, "");
+const key = line
+  .split("=")
+  .slice(1)
+  .join("=")
+  .trim()
+  .replace(/^["']|["']$/g, "");
 
 const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
 const payload = {
