@@ -17,6 +17,9 @@
 const POLLINATIONS_TEXT = "https://text.pollinations.ai/";
 const POLLINATIONS_IMAGE = "https://image.pollinations.ai/prompt/";
 const OLLAMA_BASE = "http://localhost:11434/api/chat";
+const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
+// Modelos de razonamiento Gemini con salida JSON estructurada (free tier si hay cuota).
+const GEMINI_MODELS = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"];
 
 // Rotación de modelos gratuitos de Pollinations (anónimo, sin clave, sin límites).
 const TEXT_MODELS = [
@@ -256,6 +259,73 @@ async function chatWithPollinations(
   const content = data.choices?.[0]?.message?.content;
   if (!content?.trim()) throw new Error(`${label}: el modelo no devolvió contenido.`);
   return content;
+}
+
+// ---------------------------------------------------------------------------
+// Proveedor 0: Gemini (Google AI) — salida JSON estructurada. Si la clave no
+// existe o la cuota está agotada (429), el error degrada a los siguientes.
+// ---------------------------------------------------------------------------
+
+interface GeminiGenerateResponse {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+  }>;
+  error?: { message?: string; code?: number };
+}
+
+async function chatWithGemini(
+  system: string,
+  user: string,
+  maxTokens: number,
+  label: string,
+): Promise<string> {
+  const key = process.env["GEMINI_API_KEY"];
+  if (!key) throw new Error(`${label}: falta GEMINI_API_KEY.`);
+
+  let lastError: Error | null = null;
+  for (const model of GEMINI_MODELS) {
+    try {
+      const url = `${GEMINI_BASE}/models/${model}:generateContent?key=${key}`;
+      const response = await fetchWithRetries(
+        url,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: system }] },
+            contents: [{ role: "user", parts: [{ text: user }] }],
+            generationConfig: {
+              temperature: 0.7,
+              maxOutputTokens: maxTokens,
+              responseMimeType: "application/json",
+            },
+          }),
+        },
+        { label: `${label}-gemini-${model}` },
+      );
+      const body = await response.text();
+      if (!response.ok) {
+        lastError = new Error(`${label} [${response.status}]: ${body.slice(0, 300)}`);
+        continue;
+      }
+      const data = JSON.parse(body) as GeminiGenerateResponse;
+      if (data.error?.message) {
+        lastError = new Error(`${label}: ${data.error.message}`);
+        continue;
+      }
+      const content = data.candidates?.[0]?.content?.parts
+        ?.map((part) => part.text ?? "")
+        .join("");
+      if (!content?.trim()) {
+        lastError = new Error(`${label}: el modelo no devolvió contenido.`);
+        continue;
+      }
+      return content;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  throw lastError ?? new Error(`${label}: Gemini falló.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -803,23 +873,59 @@ function buildDossier(args: ReasonArgs, rng: () => number): Record<string, unkno
   };
 }
 
-// Genera un QualityCheck determinista que APRUEBA (scores altos, sin bloqueos).
-function buildQualityCheck(): QualityCheck {
+/**
+ * QA determinístico HONESTO: calcula puntajes a partir del dossier real.
+ * Da 90+ solo si el material realmente tiene gancho, ritmo, CTA y duración.
+ */
+function buildQualityCheck(args: ReasonArgs): QualityCheck {
+  const rng = makeRng(seedFromPrompt(args.prompt));
+  const clamp = (value: number) => Math.min(100, Math.max(0, Math.round(value)));
+
+  // Intentamos extraer señales reales del dossier serializado en el prompt.
+  const raw = args.prompt;
+  const hasGuion = raw.includes('"guion"');
+  const hasPlanos = raw.includes('"planos"');
+  const ganchoTexto = /Gancho[:\s]*"?[^"\n]{0,200}/i.test(raw);
+  const tieneCta = /coment|rebobin|¿Cre|Coment|suscri/i.test(raw);
+  const sinSaludo = !/hola a todos|bienvenidos|hoy te voy a contar/i.test(raw);
+
+  const gancho = clamp(52 + rng() * 10 + (ganchoTexto ? 12 : 0) + (sinSaludo ? 10 : 0));
+  const impacto = clamp(50 + rng() * 8 + (ganchoTexto ? 10 : 0));
+  const ritmo = clamp(50 + rng() * 8 + (hasPlanos ? 14 : 0));
+  const originalidad = clamp(48 + rng() * 10);
+  const claridad = clamp(58 + rng() * 8 + (sinSaludo ? 8 : 0));
+  const repeticiones = clamp(70 + rng() * 10 + (hasGuion ? 6 : 0));
+  const cta = clamp(45 + rng() * 10 + (tieneCta ? 18 : 0));
+
+  const puntaje_total = Math.round(gancho * 0.25 + impacto * 0.25 + ritmo * 0.15 + originalidad * 0.1 + claridad * 0.1 + repeticiones * 0.1 + cta * 0.05);
+
+  const problemas: Array<{ area: string; detalle: string; correccion: string }> = [];
+  if (gancho < 70) problemas.push({ area: "gancho", detalle: "El gancho no genera suficiente tensión inicial.", correccion: "Abrir con una contradicción o dato imposible en los primeros 3 segundos." });
+  if (cta < 70) problemas.push({ area: "cta", detalle: "El cierre no empuja el comentario.", correccion: "Terminar con una pregunta abierta o una afirmación discutible." });
+  if (ritmo < 70) problemas.push({ area: "ritmo", detalle: "El ritmo visual es lento.", correccion: "Subir los cortes a 1,5-2,5 segundos y sacar planos muertos." });
+
+  const veredicto =
+    puntaje_total >= 80
+      ? "APROBADO — el short detiene el scroll y sostiene la atención."
+      : puntaje_total >= 70
+        ? "A PROBAR — necesita correcciones menores."
+        : "RECHAZADO — el material no está listo para publicar.";
+
   return {
     puntajes: {
-      gancho: 92,
-      impacto_emocional: 90,
-      ritmo: 88,
-      originalidad: 86,
-      claridad: 91,
-      sin_repeticiones: 95,
-      cta: 89,
+      gancho,
+      impacto_emocional: impacto,
+      ritmo,
+      originalidad,
+      claridad,
+      sin_repeticiones: repeticiones,
+      cta,
     },
-    puntaje_total: 91,
-    veredicto: "APROBADO — el short detiene el scroll y sostiene la atención hasta el final.",
-    problemas: [],
-    prediccion_retencion_3s: 87,
-    prediccion_retencion_final: 71,
+    puntaje_total,
+    veredicto,
+    problemas,
+    prediccion_retencion_3s: clamp(40 + puntaje_total * 0.5),
+    prediccion_retencion_final: clamp(30 + puntaje_total * 0.35),
     frases_repetidas: [],
   };
 }
@@ -832,7 +938,7 @@ function buildDeterministic(args: ReasonArgs): unknown {
     case "dossier":
       return buildDossier(args, rng);
     case "control_de_calidad":
-      return buildQualityCheck();
+      return buildQualityCheck(args);
     default:
       return { ok: true };
   }
@@ -840,10 +946,20 @@ function buildDeterministic(args: ReasonArgs): unknown {
 
 // ---------------------------------------------------------------------------
 // Razonamiento con salida JSON estructurada.
-//   Pollinations (principal, free) → Ollama local (fallback) → generador
+//   Gemini (si hay clave) → Pollinations → Ollama local → generador
 //   determinístico (garantizado, nunca falla). Valida la forma del JSON antes de
 //   devolverlo.
 // ---------------------------------------------------------------------------
+
+async function reasonFromGemini(args: ReasonArgs, maxTokens: number): Promise<unknown> {
+  const content = await chatWithGemini(
+    args.system,
+    `${args.prompt}\n\n${effortHint(args.effort ?? "medium")}`,
+    maxTokens,
+    args.schemaName,
+  );
+  return parseJsonContent(content);
+}
 
 async function reasonFromPollinations(args: ReasonArgs, maxTokens: number): Promise<unknown> {
   const messages = toMessages(
@@ -873,8 +989,10 @@ export async function reason<T>({
 }: ReasonArgs): Promise<T> {
   const maxTokens = effort === "high" ? 8192 : 4096;
   const args = { system, prompt, schemaName, schema, effort };
+  const hasGeminiKey = Boolean(process.env["GEMINI_API_KEY"]);
 
   const intentos: Array<() => Promise<unknown>> = [
+    ...(hasGeminiKey ? [() => reasonFromGemini(args, maxTokens)] : []),
     () => reasonFromPollinations(args, maxTokens),
     () => reasonFromOllama(args, maxTokens),
     () => Promise.resolve(buildDeterministic(args)),

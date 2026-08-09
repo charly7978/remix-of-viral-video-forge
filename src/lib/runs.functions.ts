@@ -87,35 +87,6 @@ const gateSchema = z
   })
   .optional();
 
-function fmtTime(seg: number): string {
-  const h = Math.floor(seg / 3600);
-  const m = Math.floor((seg % 3600) / 60);
-  const s = Math.floor(seg % 60);
-  const ms = Math.floor((seg - Math.floor(seg)) * 1000);
-  const pad = (n: number, l = 2) => String(n).padStart(l, "0");
-  return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms, 3)}`;
-}
-
-/** Construye un SRT a partir del guion: cada beat con su voz en off y su texto en pantalla. */
-function buildSrt(
-  guion: Array<{
-    desde_seg: number;
-    hasta_seg: number;
-    voz_en_off: string;
-    texto_en_pantalla: string;
-  }>,
-): string {
-  const segments = guion
-    .filter(
-      (g) => (g.voz_en_off || g.texto_en_pantalla) && Number(g.hasta_seg) > Number(g.desde_seg),
-    )
-    .map((g, i) => {
-      const text = (g.texto_en_pantalla || g.voz_en_off || "").trim();
-      return `${i + 1}\n${fmtTime(Number(g.desde_seg))} --> ${fmtTime(Number(g.hasta_seg))}\n${text}`;
-    });
-  return segments.join("\n\n");
-}
-
 export const startRun = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) =>
     z.object({ slot: z.enum(["viral", "general"]), gate: gateSchema }).parse(input),
@@ -235,17 +206,17 @@ export const advanceVideo = createServerFn({ method: "POST" })
           localFrames.push({ numero: f.numero, path: local });
         }
 
-        const subs = await buildSrt(guion);
-        const subsPath = nodePath.join(tmp, "subs.srt");
-        if (subs) await fsp.writeFile(subsPath, subs);
-
         const assembleArgs: Parameters<typeof assembleVideo>[0] = {
           frames: localFrames,
           voiceover,
           durationSec,
           runId: data.id,
+          beats: guion.map((g) => ({
+            desde_seg: Number(g.desde_seg) || 0,
+            hasta_seg: Number(g.hasta_seg) || 0,
+            texto_en_pantalla: (g.texto_en_pantalla || g.voz_en_off || "").trim(),
+          })),
         };
-        if (subs) assembleArgs.subtitles = subsPath;
 
         const bytes = await assembleVideo(assembleArgs);
 
